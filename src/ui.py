@@ -13,7 +13,7 @@ from src.config import (
     CALIB_POINTS
 )
 
-from src.eye_tracker import (
+from src.eye_tracking import (
     LEFT_EYE,
     RIGHT_EYE,
     LEFT_IRIS,
