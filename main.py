@@ -487,6 +487,24 @@ def main():
                     -1
                 )
 
+                cv2.circle(
+                    kbd_bg,
+                    (gaze_x, gaze_y),
+                    5,
+                    cursor_color,
+                    -1
+                )
+
+                cv2.putText(
+                    kbd_bg,
+                    f"({gaze_x}, {gaze_y})",
+                    (gaze_x + 20, gaze_y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (255, 255, 255),
+                    1
+                )
+
                 cv2.line(
                     kbd_bg,
                     (gaze_x - 26, gaze_y),
