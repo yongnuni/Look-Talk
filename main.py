@@ -1,6 +1,12 @@
 import cv2
 import time
 import numpy as np
+import cv2
+import time
+import numpy as np
+import random
+import uuid
+from datetime import datetime
 
 import src.hangul as hangul
 
@@ -80,6 +86,31 @@ def main():
     buttonList = create_buttons(
         keys_eng_normal
     )
+    # =========================
+    # 테스트 설정
+    # =========================
+
+    TEST_SENTENCES = [
+    "안녕하세요",
+    "감사합니다"
+    ]
+
+    test_mode = True
+
+    target_text = random.choice(
+        TEST_SENTENCES
+    )
+
+    session_start = None
+
+    keystrokes = 0
+    backspace_count = 0
+
+    reaction_times = []
+    last_key_time = None
+    test_complete_time = None
+
+    test_saved = False
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
@@ -232,6 +263,12 @@ def main():
                         calibrator.reset()
 
                     continue
+                
+                if (
+                    session_start is None
+                ):
+                    session_start = time.time()
+
 
                 sx, sy = (
                     calibrator.map_to_screen(
@@ -385,6 +422,20 @@ def main():
                         )
 
                         if dwell_ratio >= 1.0:
+                            clicked_key = dwell_key
+                            keystrokes += 1
+
+                            if clicked_key == "Del":
+                                 backspace_count += 1
+
+                            if last_key_time is not None:
+                                    
+                                    reaction_times.append(
+                                        now - last_key_time 
+                                    )
+
+                            last_key_time = now
+
 
                             (
                                 is_korean,
@@ -439,6 +490,13 @@ def main():
             draw = ImageDraw.Draw(
                 img_pil
             )
+            if test_mode:
+                draw.text(
+                    (55,5),
+                    f"입력 문장 : {target_text}",
+                    font=font,
+                    fill=(0,255,0)
+                )
 
             draw.text(
                 (55,25),
@@ -447,11 +505,62 @@ def main():
                 font=font,
                 fill=(255,255,255)
             )
+            
 
             kbd_bg = np.array(
                 img_pil
             )
+           
 
+            current_text = (
+            hangul.finalText +
+            hangul.compose_jamo_buffer()
+            )
+            
+            if ( 
+                test_mode
+                and
+                not test_saved
+                and
+                current_text.strip()
+                    ==
+                target_text
+                ):
+                
+                
+                print()
+                print("===== 테스트 완료 =====")
+                print(
+                    "목표:",
+                    target_text
+                    )
+                print(
+                    "입력:",
+                    current_text
+                    )
+                print(
+                    "키 입력:",
+                    keystrokes
+                    )
+
+                print(
+                    "백스페이스:",
+                    backspace_count
+                    )
+
+                test_saved = True
+                test_complete_time = time.time()
+
+
+                test_mode = False
+
+                hangul.finalText = ""
+
+                hangul.jamo_buffer[:] = [
+                    '',
+                    '',
+                    ''
+                ]
             kbd_bg = drawAll(
                 kbd_bg,
                 buttonList,
@@ -460,6 +569,35 @@ def main():
                 dwell_key,
                 dwell_ratio
             )
+            if (
+                test_complete_time is not None
+                and
+                time.time() - test_complete_time < 2
+            ):
+
+                img_pil = Image.fromarray(kbd_bg)
+                draw = ImageDraw.Draw(img_pil)
+
+                draw.rectangle(
+                    [250, 220, 1030, 430],
+                    fill=(0, 0, 0)
+                )
+
+                draw.text(
+                    (470, 270),
+                    "테스트 완료!",
+                    font=font,
+                    fill=(0, 255, 0)
+                )
+
+                draw.text(
+                    (320, 340),
+                    "일반 키보드 모드로 전환됩니다.",
+                    font=font,
+                    fill=(255, 255, 255)
+                )
+
+                kbd_bg = np.array(img_pil)
 
             # ── 시선 커서 ────────────────────────────────────
 
