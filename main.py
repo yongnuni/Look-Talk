@@ -1,25 +1,14 @@
 import cv2
-import time
 import numpy as np
-import cv2
-import time
-import numpy as np
-import random
-import uuid
-from datetime import datetime
 
 import src.hangul as hangul
 
 from src.config import (
     SCREEN_W,
-    SCREEN_H,
-    SMOOTH_ALPHA,
-    DWELL_SEC,
-    FIXATION_RADIUS,
-    FIXATION_FRAMES
+    SCREEN_H
 )
 
-from src.eye_tracking import (
+from src.tracking.eye_tracking import (
     mp_face_mesh,
     LEFT_EYE,
     RIGHT_EYE,
@@ -34,7 +23,9 @@ from src.eye_tracking import (
     draw_iris_ring
 )
 
-from src.calibration import Calibrator
+from src.tracking.calibration import Calibrator
+from src.tracking.gaze_pipeline import GazePipeline
+from src.tracking.dwell import DwellController
 
 from src.keyboard import (
     create_buttons,
@@ -46,88 +37,42 @@ from src.ui import (
     show_countdown,
     draw_calib_screen,
     drawAll,
+    draw_gaze_cursor,
+    draw_status_bar,
+    draw_test_complete_overlay,
+    draw_text_area,
     font
 )
 
-from PIL import ImageDraw, Image
+from tests.test_runner import TestRunner
+
 
 def main():
 
     cap = cv2.VideoCapture(0)
 
-    cap.set(
-        cv2.CAP_PROP_FRAME_WIDTH,
-        640
-    )
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    cap.set(
-        cv2.CAP_PROP_FRAME_HEIGHT,
-        480
-    )
-
-    cv2.namedWindow(
-        "Eye Keyboard",
-        cv2.WINDOW_NORMAL
-    )
-
-    cv2.resizeWindow(
-        "Eye Keyboard",
-        SCREEN_W,
-        SCREEN_H
-    )
+    cv2.namedWindow("Eye Keyboard", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Eye Keyboard", SCREEN_W, SCREEN_H)
 
     calibrator = Calibrator()
-
-    smooth_gaze = None
+    gaze = GazePipeline()
+    dwell = DwellController()
+    tester = TestRunner()
 
     is_korean = False
     is_shift = False
 
-    buttonList = create_buttons(
-        keys_eng_normal
-    )
-    # =========================
-    # 테스트 설정
-    # =========================
-
-    TEST_SENTENCES = [
-    "안녕하세요",
-    "감사합니다"
-    ]
-
-    test_mode = True
-
-    target_text = random.choice(
-        TEST_SENTENCES
-    )
-
-    session_start = None
-
-    keystrokes = 0
-    backspace_count = 0
-
-    reaction_times = []
-    last_key_time = None
-    test_complete_time = None
-
-    test_saved = False
+    buttonList = create_buttons(keys_eng_normal)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
         dtype=np.uint8
     )
 
-    fixation_center = None
-    fixation_count = 0
-
-    dwell_key = None
-    dwell_start = None
-
-    cooldown_end = 0
-
-    print(
-        "Eye Keyboard 시작 | r: 재캘리브레이션 | q: 종료"
-    )
+    print("Eye Keyboard 시작 | r: 재캘리브레이션 | q: 종료")
 
     with mp_face_mesh.FaceMesh(
         max_num_faces=1,
@@ -136,10 +81,7 @@ def main():
         min_tracking_confidence=0.6
     ) as face_mesh:
 
-        if not show_countdown(
-            cap,
-            face_mesh
-        ):
+        if not show_countdown(cap, face_mesh):
             cap.release()
             cv2.destroyAllWindows()
             return
@@ -151,544 +93,102 @@ def main():
             if not ret:
                 break
 
-            frame = cv2.flip(
-                frame,
-                1
-            )
-
+            frame = cv2.flip(frame, 1)
             fh, fw = frame.shape[:2]
 
-            rgb = cv2.cvtColor(
-                frame,
-                cv2.COLOR_BGR2RGB
-            )
-
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             rgb.flags.writeable = False
-
-            results = face_mesh.process(
-                rgb
-            )
-
+            results = face_mesh.process(rgb)
             rgb.flags.writeable = True
 
             gaze_x = -1
             gaze_y = -1
-
+            fixation_count = 0
             elapsed_ratio = 0.0
-
-            now = time.time()
 
             if results.multi_face_landmarks:
 
                 lms = results.multi_face_landmarks[0]
 
-                draw_eye_contour(
-                    frame,
-                    lms,
-                    LEFT_EYE,
-                    fw,
-                    fh
-                )
+                draw_eye_contour(frame, lms, LEFT_EYE, fw, fh)
+                draw_eye_contour(frame, lms, RIGHT_EYE, fw, fh)
+                draw_iris_ring(frame, lms, LEFT_IRIS, LEFT_IRIS_RING, fw, fh, (0, 200, 255))
+                draw_iris_ring(frame, lms, RIGHT_IRIS, RIGHT_IRIS_RING, fw, fh, (0, 200, 255))
 
-                draw_eye_contour(
-                    frame,
-                    lms,
-                    RIGHT_EYE,
-                    fw,
-                    fh
-                )
-
-                draw_iris_ring(
-                    frame,
-                    lms,
-                    LEFT_IRIS,
-                    LEFT_IRIS_RING,
-                    fw,
-                    fh,
-                    (0,200,255)
-                )
-
-                draw_iris_ring(
-                    frame,
-                    lms,
-                    RIGHT_IRIS,
-                    RIGHT_IRIS_RING,
-                    fw,
-                    fh,
-                    (0,200,255)
-                )
-
-                iris_x, iris_y = get_avg_iris(
-                    lms
-                )
-
+                iris_x, iris_y = get_avg_iris(lms)
                 blink = is_blink(lms)
+                conf = iris_confidence(lms)
 
-                conf = iris_confidence(
-                    lms
-                )
+                # ── 캘리브레이션 ──────────────────────────────
 
                 if not calibrator.done:
 
                     if not blink:
+                        elapsed_ratio = calibrator.update(iris_x, iris_y, conf)
 
-                        elapsed_ratio = (
-                            calibrator.update(
-                                iris_x,
-                                iris_y,
-                                conf
-                            )
-                        )
+                    draw_calib_screen(calib_canvas, calibrator, elapsed_ratio)
+                    cv2.imshow("Eye Keyboard", calib_canvas)
 
-                    draw_calib_screen(
-                        calib_canvas,
-                        calibrator,
-                        elapsed_ratio
-                    )
-
-                    cv2.imshow(
-                        "Eye Keyboard",
-                        calib_canvas
-                    )
-
-                    key = (
-                        cv2.waitKey(1)
-                        & 0xFF
-                    )
+                    key = cv2.waitKey(1) & 0xFF
 
                     if key == ord('q'):
                         break
-
                     elif key == ord('r'):
                         calibrator.reset()
 
                     continue
-                
-                if (
-                    session_start is None
-                ):
-                    session_start = time.time()
 
+                # ── 시선 파이프라인 ───────────────────────────
 
-                sx, sy = (
-                    calibrator.map_to_screen(
-                        iris_x,
-                        iris_y
-                    )
+                sx, sy = calibrator.map_to_screen(iris_x, iris_y)
+
+                gaze_x, gaze_y, fixation_count = gaze.update(sx, sy, conf, blink)
+
+            # ── 드웰 클릭 ─────────────────────────────────────
+
+            hovered_key, dwell_ratio, clicked_key = dwell.update(
+                gaze_x, gaze_y, buttonList
+            )
+
+            if clicked_key:
+
+                tester.on_key_press(clicked_key)
+
+                (is_korean, is_shift, buttonList) = process_key(
+                    clicked_key,
+                    is_korean,
+                    is_shift,
+                    buttonList
                 )
-
-                if (
-                    sx is not None
-                    and
-                    not blink
-                    and
-                    conf > 0.3
-                ):
-
-                    if smooth_gaze is None:
-
-                        smooth_gaze = [
-                            float(sx),
-                            float(sy)
-                        ]
-
-                    alpha = (
-                        SMOOTH_ALPHA *
-                        max(0.3, conf)
-                    )
-
-                    smooth_gaze[0] += (
-                        alpha *
-                        (
-                            sx -
-                            smooth_gaze[0]
-                        )
-                    )
-
-                    smooth_gaze[1] += (
-                        alpha *
-                        (
-                            sy -
-                            smooth_gaze[1]
-                        )
-                    )
-
-                    sx_s = smooth_gaze[0]
-                    sy_s = smooth_gaze[1]
-
-                    if fixation_center is None:
-                        fixation_center = [
-                            sx_s,
-                            sy_s
-                        ]
-
-                        fixation_count = 1
-
-                    else:
-
-                        dist = np.hypot(
-                            sx_s -
-                            fixation_center[0],
-                            sy_s -
-                            fixation_center[1]
-                        )
-
-                        if dist < FIXATION_RADIUS:
-
-                            fixation_count += 1
-
-                            fixation_center[0] += (
-                                0.05 *
-                                (
-                                    sx_s -
-                                    fixation_center[0]
-                                )
-                            )
-
-                            fixation_center[1] += (
-                                0.05 *
-                                (
-                                    sy_s -
-                                    fixation_center[1]
-                                )
-                            )
-
-                        else:
-
-                            fixation_center = [
-                                sx_s,
-                                sy_s
-                            ]
-
-                            fixation_count = 1
-
-                    if fixation_count >= FIXATION_FRAMES:
-
-                        gaze_x = int(
-                            fixation_center[0]
-                        )
-
-                        gaze_y = int(
-                            fixation_center[1]
-                        )
-
-                    else:
-
-                        gaze_x = int(sx_s)
-                        gaze_y = int(sy_s)
-
-                else:
-
-                    fixation_center = None
-                    fixation_count = 0
-
-                        # ── 드웰 클릭 로직 ────────────────────────────────
-
-            dwell_ratio = 0.0
-
-            hovered_key = None
-
-            if gaze_x >= 0 and now > cooldown_end:
-
-                for button in buttonList:
-
-                    bx, by = button.pos
-                    bw, bh = button.size
-
-                    if (
-                        bx < gaze_x < bx + bw
-                        and
-                        by < gaze_y < by + bh
-                    ):
-
-                        hovered_key = button.text
-                        break
-
-                if hovered_key:
-
-                    if hovered_key != dwell_key:
-
-                        dwell_key = hovered_key
-
-                        dwell_start = now
-
-                    else:
-
-                        elapsed = now - dwell_start
-
-                        dwell_ratio = min(
-                            1.0,
-                            elapsed / DWELL_SEC
-                        )
-
-                        if dwell_ratio >= 1.0:
-                            clicked_key = dwell_key
-                            keystrokes += 1
-
-                            if clicked_key == "Del":
-                                 backspace_count += 1
-
-                            if last_key_time is not None:
-                                    
-                                    reaction_times.append(
-                                        now - last_key_time 
-                                    )
-
-                            last_key_time = now
-
-
-                            (
-                                is_korean,
-                                is_shift,
-                                buttonList
-                            ) = process_key(
-                                dwell_key,
-                                is_korean,
-                                is_shift,
-                                buttonList
-                            )
-
-                            cooldown_end = now + 0.4
-
-                            dwell_key = None
-                            dwell_start = None
-
-                else:
-
-                    dwell_key = None
-                    dwell_start = None
 
             # ── 렌더링 ────────────────────────────────────────
 
-            kbd_bg = np.zeros(
-                (
-                    SCREEN_H,
-                    SCREEN_W,
-                    3
-                ),
-                dtype=np.uint8
-            )
-
-            kbd_bg[:] = (
-                30,
-                30,
-                30
-            )
-
-            cv2.rectangle(
-                kbd_bg,
-                (40,20),
-                (SCREEN_W - 40,100),
-                (0,0,0),
-                -1
-            )
-
-            img_pil = Image.fromarray(
-                kbd_bg
-            )
-
-            draw = ImageDraw.Draw(
-                img_pil
-            )
-            if test_mode:
-                draw.text(
-                    (55,5),
-                    f"입력 문장 : {target_text}",
-                    font=font,
-                    fill=(0,255,0)
-                )
-
-            draw.text(
-                (55,25),
-                hangul.finalText +
-                hangul.compose_jamo_buffer(),
-                font=font,
-                fill=(255,255,255)
-            )
-            
-
-            kbd_bg = np.array(
-                img_pil
-            )
-           
+            kbd_bg = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
+            kbd_bg[:] = (30, 30, 30)
 
             current_text = (
-            hangul.finalText +
-            hangul.compose_jamo_buffer()
+                hangul.finalText +
+                hangul.compose_jamo_buffer()
             )
-            
-            if ( 
-                test_mode
-                and
-                not test_saved
-                and
-                current_text.strip()
-                    ==
-                target_text
-                ):
-                
-                
-                print()
-                print("===== 테스트 완료 =====")
-                print(
-                    "목표:",
-                    target_text
-                    )
-                print(
-                    "입력:",
-                    current_text
-                    )
-                print(
-                    "키 입력:",
-                    keystrokes
-                    )
 
-                print(
-                    "백스페이스:",
-                    backspace_count
-                    )
+            target = tester.target_text if tester.active else None
 
-                test_saved = True
-                test_complete_time = time.time()
+            kbd_bg = draw_text_area(kbd_bg, current_text, target)
 
-
-                test_mode = False
-
+            # 테스트 완료 감지
+            if tester.check_complete(current_text):
                 hangul.finalText = ""
+                hangul.jamo_buffer[:] = ['', '', '']
 
-                hangul.jamo_buffer[:] = [
-                    '',
-                    '',
-                    ''
-                ]
-            kbd_bg = drawAll(
-                kbd_bg,
-                buttonList,
-                gaze_x,
-                gaze_y,
-                dwell_key,
-                dwell_ratio
-            )
-            if (
-                test_complete_time is not None
-                and
-                time.time() - test_complete_time < 2
-            ):
+            kbd_bg = drawAll(kbd_bg, buttonList, gaze_x, gaze_y, dwell.dwell_key, dwell_ratio)
 
-                img_pil = Image.fromarray(kbd_bg)
-                draw = ImageDraw.Draw(img_pil)
+            if tester.is_showing_complete():
+                kbd_bg = draw_test_complete_overlay(kbd_bg)
 
-                draw.rectangle(
-                    [250, 220, 1030, 430],
-                    fill=(0, 0, 0)
-                )
+            kbd_bg = draw_gaze_cursor(kbd_bg, gaze_x, gaze_y, fixation_count)
+            kbd_bg = draw_status_bar(kbd_bg, is_korean, fixation_count)
 
-                draw.text(
-                    (470, 270),
-                    "테스트 완료!",
-                    font=font,
-                    fill=(0, 255, 0)
-                )
-
-                draw.text(
-                    (320, 340),
-                    "일반 키보드 모드로 전환됩니다.",
-                    font=font,
-                    fill=(255, 255, 255)
-                )
-
-                kbd_bg = np.array(img_pil)
-
-            # ── 시선 커서 ────────────────────────────────────
-
-            if gaze_x >= 0:
-
-                cursor_color = (
-                    (0,255,120)
-                    if fixation_count >= FIXATION_FRAMES
-                    else (0,220,255)
-                )
-
-                cv2.circle(
-                    kbd_bg,
-                    (gaze_x, gaze_y),
-                    18,
-                    cursor_color,
-                    2
-                )
-
-                cv2.circle(
-                    kbd_bg,
-                    (gaze_x, gaze_y),
-                    5,
-                    cursor_color,
-                    -1
-                )
-
-                cv2.circle(
-                    kbd_bg,
-                    (gaze_x, gaze_y),
-                    5,
-                    cursor_color,
-                    -1
-                )
-
-                cv2.putText(
-                    kbd_bg,
-                    f"({gaze_x}, {gaze_y})",
-                    (gaze_x + 20, gaze_y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4,
-                    (255, 255, 255),
-                    1
-                )
-
-                cv2.line(
-                    kbd_bg,
-                    (gaze_x - 26, gaze_y),
-                    (gaze_x + 26, gaze_y),
-                    cursor_color,
-                    1
-                )
-
-                cv2.line(
-                    kbd_bg,
-                    (gaze_x, gaze_y - 26),
-                    (gaze_x, gaze_y + 26),
-                    cursor_color,
-                    1
-                )
-
-            status = (
-                f"{'한글' if is_korean else 'ENG'}"
-                f"  |  드웰: {DWELL_SEC}s"
-                f"  |  고정: {fixation_count}f"
-            )
-
-            cv2.putText(
-                kbd_bg,
-                status,
-                (SCREEN_W - 340, SCREEN_H - 15),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (150,150,150),
-                1
-            )
-
-            cv2.putText(
-                kbd_bg,
-                "r: 재캘리브레이션   q: 종료",
-                (20, SCREEN_H - 15),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (100,100,100),
-                1
-            )
-
-            cv2.imshow(
-                "Eye Keyboard",
-                kbd_bg
-            )
+            cv2.imshow("Eye Keyboard", kbd_bg)
 
             key = cv2.waitKey(1) & 0xFF
 
@@ -696,23 +196,13 @@ def main():
                 break
 
             elif key == ord('r'):
-
                 calibrator.reset()
+                gaze.reset()
 
-                smooth_gaze = None
-
-                fixation_center = None
-
-                fixation_count = 0
-
-                if not show_countdown(
-                    cap,
-                    face_mesh
-                ):
+                if not show_countdown(cap, face_mesh):
                     break
 
     cap.release()
-
     cv2.destroyAllWindows()
 
 
