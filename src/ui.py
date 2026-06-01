@@ -3,6 +3,7 @@ import time
 import numpy as np
 
 from PIL import ImageFont, ImageDraw, Image
+from src.config import SCREEN_W, SCREEN_H, FIXATION_FRAMES
 
 from src.config import (
     FONT_PATH,
@@ -13,7 +14,7 @@ from src.config import (
     CALIB_POINTS
 )
 
-from src.eye_tracking import (
+from src.tracking.eye_tracking import (
     LEFT_EYE,
     RIGHT_EYE,
     LEFT_IRIS,
@@ -407,4 +408,119 @@ def drawAll(
             fill=(255,255,255)
         )
 
+    return np.array(img_pil)
+
+def draw_gaze_cursor(img, gaze_x, gaze_y, fixation_count):
+    """시선 커서 및 십자선 렌더링."""
+ 
+    if gaze_x < 0:
+        return img
+ 
+    cursor_color = (
+        (0, 255, 120)
+        if fixation_count >= FIXATION_FRAMES
+        else (0, 220, 255)
+    )
+ 
+    cv2.circle(img, (gaze_x, gaze_y), 18, cursor_color, 2)
+    cv2.circle(img, (gaze_x, gaze_y), 5, cursor_color, -1)
+ 
+    cv2.putText(
+        img,
+        f"({gaze_x}, {gaze_y})",
+        (gaze_x + 20, gaze_y - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.4,
+        (255, 255, 255),
+        1
+    )
+ 
+    cv2.line(img, (gaze_x - 26, gaze_y), (gaze_x + 26, gaze_y), cursor_color, 1)
+    cv2.line(img, (gaze_x, gaze_y - 26), (gaze_x, gaze_y + 26), cursor_color, 1)
+ 
+    return img
+ 
+ 
+def draw_status_bar(img, is_korean, fixation_count):
+    """하단 상태 바 렌더링."""
+ 
+    from src.config import DWELL_SEC
+ 
+    status = (
+        f"{'한글' if is_korean else 'ENG'}"
+        f"  |  드웰: {DWELL_SEC}s"
+        f"  |  고정: {fixation_count}f"
+    )
+ 
+    cv2.putText(
+        img,
+        status,
+        (SCREEN_W - 340, SCREEN_H - 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (150, 150, 150),
+        1
+    )
+ 
+    cv2.putText(
+        img,
+        "r: 재캘리브레이션   q: 종료",
+        (20, SCREEN_H - 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (100, 100, 100),
+        1
+    )
+ 
+    return img
+ 
+ 
+def draw_test_complete_overlay(img):
+    """테스트 완료 팝업 오버레이 렌더링."""
+ 
+    img_pil = Image.fromarray(img)
+    draw = ImageDraw.Draw(img_pil)
+ 
+    draw.rectangle([250, 220, 1030, 430], fill=(0, 0, 0))
+ 
+    draw.text(
+        (470, 270),
+        "테스트 완료!",
+        font=font,
+        fill=(0, 255, 0)
+    )
+ 
+    draw.text(
+        (320, 340),
+        "일반 키보드 모드로 전환됩니다.",
+        font=font,
+        fill=(255, 255, 255)
+    )
+ 
+    return np.array(img_pil)
+ 
+ 
+def draw_text_area(img, current_text, target_text=None):
+    """상단 텍스트 입력 영역 렌더링."""
+ 
+    cv2.rectangle(img, (40, 20), (SCREEN_W - 40, 100), (0, 0, 0), -1)
+ 
+    img_pil = Image.fromarray(img)
+    draw = ImageDraw.Draw(img_pil)
+ 
+    if target_text is not None:
+        draw.text(
+            (55, 5),
+            f"입력 문장 : {target_text}",
+            font=font,
+            fill=(0, 255, 0)
+        )
+ 
+    draw.text(
+        (55, 25),
+        current_text,
+        font=font,
+        fill=(255, 255, 255)
+    )
+ 
     return np.array(img_pil)
