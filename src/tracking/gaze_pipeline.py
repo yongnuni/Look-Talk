@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 
 from src.config import (
@@ -10,14 +11,53 @@ from src.config import (
 class GazePipeline:
 
     def __init__(self):
-        self.smooth_gaze = None
         self.fixation_center = None
         self.fixation_count = 0
+        self.last_output = None
+
+        self.kalman = cv2.KalmanFilter(4, 2)
+
+        self.kalman.measurementMatrix = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0]
+            ],
+            np.float32
+        )
+
+        self.kalman.transitionMatrix = np.array(
+            [
+                [1, 0, 1, 0],
+                [0, 1, 0, 1],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1]
+            ],
+            np.float32
+        )
+
+        self.kalman.processNoiseCov = (
+            np.eye(4, dtype=np.float32) * 0.03
+        )
+
+        self.kalman.measurementNoiseCov = (
+            np.eye(2, dtype=np.float32) * 0.5
+        )
+
+        self.initialized = False
+        
 
     def reset(self):
-        self.smooth_gaze = None
         self.fixation_center = None
         self.fixation_count = 0
+        self.last_output = None
+
+        self.kalman.statePost = np.zeros(
+        (4, 1),
+        np.float32
+        )
+
+        self.initialized = False
+        
 
     def update(self, sx, sy, conf, blink):
         """
@@ -34,17 +74,52 @@ class GazePipeline:
             self.fixation_count = 0
             return -1, -1, 0
 
-        # EMA 스무딩
-        if self.smooth_gaze is None:
-            self.smooth_gaze = [float(sx), float(sy)]
 
-        alpha = SMOOTH_ALPHA * max(0.3, conf)
+        # Kalman Filter
+        if not self.initialized:
 
-        self.smooth_gaze[0] += alpha * (sx - self.smooth_gaze[0])
-        self.smooth_gaze[1] += alpha * (sy - self.smooth_gaze[1])
+            self.kalman.statePost = np.array(
+                [
+                    [np.float32(sx)],
+                     [np.float32(sy)],
+                     [0],
+                    [0]
+                ],
+                dtype=np.float32
+            )
 
-        sx_s = self.smooth_gaze[0]
-        sy_s = self.smooth_gaze[1]
+            self.initialized = True
+
+        self.kalman.predict()
+
+        measurement = np.array(
+            [
+                [np.float32(sx)],
+                [np.float32(sy)]
+            ],
+             dtype=np.float32
+        )
+
+        estimated = self.kalman.correct(measurement)
+
+        sx_s = float(estimated[0][0])
+        sy_s = float(estimated[1][0])
+        if self.last_output is None:
+            self.last_output = [sx_s, sy_s]
+
+        dead_zone = 15
+
+        dist = np.hypot(
+            sx_s - self.last_output[0],
+            sy_s - self.last_output[1]
+        )
+
+        if dist < dead_zone:
+            sx_s = self.last_output[0]
+            sy_s = self.last_output[1]
+        else:
+            self.last_output = [sx_s, sy_s]
+
 
         # Fixation 감지
         if self.fixation_center is None:
