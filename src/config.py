@@ -1,14 +1,22 @@
 import cv2
+import tkinter as tk
 
 # ── 폰트 설정 ─────────────────────────────────────────────────
 FONT_PATH = "malgun.ttf"
 FONT_SIZE = 40
 
-# ── 화면 해상도 ───────────────────────────────────────────────
-SCREEN_W = 1280
-SCREEN_H = 720
+# ── 화면 해상도 자동 감지 ─────────────────────────────────────
+
+root = tk.Tk()
+root.withdraw()
+
+SCREEN_W = root.winfo_screenwidth()
+SCREEN_H = root.winfo_screenheight()
+
+root.destroy()
 
 # ── 캘리브레이션 설정 ─────────────────────────────────────────
+
 MARGIN = 0.08
 _M = MARGIN
 _T = 1 - MARGIN
@@ -36,10 +44,11 @@ CALIB_POINTS = [
 ]
 
 CALIB_HOLD_SEC = 2.0
-SMOOTH_ALPHA   = 0.20
-COUNTDOWN_SEC  = 3
-DWELL_SEC      = 1.2
+SMOOTH_ALPHA = 0.20
+COUNTDOWN_SEC = 3
+DWELL_SEC = 1.2
 
 # ── 시선 안정화 설정 ──────────────────────────────────────────
+
 FIXATION_RADIUS = 40
 FIXATION_FRAMES = 6

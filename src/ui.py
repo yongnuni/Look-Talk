@@ -1,9 +1,15 @@
 import cv2
 import time
 import numpy as np
+import os
 
 from PIL import ImageFont, ImageDraw, Image
 from src.config import SCREEN_W, SCREEN_H, FIXATION_FRAMES
+
+cursor_img = cv2.imread(
+    os.path.join("assets", "cursor.png"),
+    cv2.IMREAD_UNCHANGED
+)
 
 from src.config import (
     FONT_PATH,
@@ -29,6 +35,11 @@ from src.tracking.eye_tracking import (
 font = ImageFont.truetype(
     FONT_PATH,
     FONT_SIZE
+)
+
+small_font = ImageFont.truetype(
+    FONT_PATH,
+    20
 )
 
 
@@ -68,6 +79,7 @@ def show_countdown(cap, face_mesh):
         rgb.flags.writeable = True
 
         face_found = False
+        conf = 0
 
         if results.multi_face_landmarks:
 
@@ -96,7 +108,7 @@ def show_countdown(cap, face_mesh):
                 LEFT_IRIS_RING,
                 w,
                 h,
-                (0,200,255)
+                (0, 200, 255)
             )
 
             draw_iris_ring(
@@ -106,7 +118,7 @@ def show_countdown(cap, face_mesh):
                 RIGHT_IRIS_RING,
                 w,
                 h,
-                (0,200,255)
+                (0, 200, 255)
             )
 
             conf = iris_confidence(lms)
@@ -119,43 +131,33 @@ def show_countdown(cap, face_mesh):
 
             cv2.rectangle(
                 frame,
-                (20, h-50),
-                (w-20, h-36),
-                (50,50,50),
+                (20, h - 50),
+                (w - 20, h - 36),
+                (50, 50, 50),
                 -1
             )
 
             qcol = (
-                (0,200,80)
+                (0, 200, 80)
                 if conf > 0.5
-                else (0,140,255)
+                else (0, 140, 255)
             )
 
             cv2.rectangle(
                 frame,
-                (20,h-50),
-                (20+bw,h-36),
+                (20, h - 50),
+                (20 + bw, h - 36),
                 qcol,
                 -1
-            )
-
-            cv2.putText(
-                frame,
-                f"홍채 인식 품질: {int(conf*100)}%",
-                (20,h-56),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (200,200,200),
-                1
             )
 
         overlay = frame.copy()
 
         cv2.rectangle(
             overlay,
-            (0,0),
-            (w,60),
-            (10,10,10),
+            (0, 0),
+            (w, 70),
+            (10, 10, 10),
             -1
         )
 
@@ -167,42 +169,50 @@ def show_countdown(cap, face_mesh):
             0
         )
 
-        cv2.putText(
-            frame,
-            "카메라를 정면으로 바라봐 주세요",
-            (10,22),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (200,200,200),
-            1
+        # ===== PIL 한글 출력 =====
+
+        img_pil = Image.fromarray(frame)
+        draw = ImageDraw.Draw(img_pil)
+
+        message = "카메라를 정면으로 바라봐 주세요"
+
+        bbox = draw.textbbox(
+            (0, 0),
+            message,
+            font=font
         )
 
-        fc = (
-            (100,255,100)
-            if face_found
-            else (80,150,255)
+        text_w = bbox[2] - bbox[0]
+
+        draw.text(
+            (
+                (w - text_w) // 2,
+                10
+            ),
+            message,
+            font=font,
+            fill=(255, 255, 255)
         )
+
+        draw.text(
+            (20, h - 80),
+            "얼굴 감지됨" if face_found else "얼굴을 찾는 중...",
+            font=small_font,
+            fill=(100, 255, 100) if face_found else (255, 180, 80)
+        )
+
+        frame = np.array(img_pil)
+
+        # ===== 카운트다운 =====
 
         cv2.putText(
             frame,
-            "얼굴 감지됨 ✓"
-            if face_found
-            else "얼굴을 찾는 중...",
-            (10,48),
+            str(int(remaining) + 1),
+            (w // 2 - 50, h // 2 + 50),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            fc,
-            1
-        )
-
-        cv2.putText(
-            frame,
-            str(int(remaining)+1),
-            (w-60,55),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            2.0,
-            (0,220,255),
-            3
+            5,
+            (0, 220, 255),
+            8
         )
 
         display = cv2.resize(
@@ -307,15 +317,17 @@ def draw_calib_screen(
             -1
         )
 
-    cv2.putText(
-        canvas,
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (20, sh - 35),
         "r: 재시작   q: 종료",
-        (20, sh-10),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        (100,100,100),
-        1
+        font=small_font,
+        fill=(120, 120, 120)
     )
+
+    canvas[:] = np.array(img_pil)
 
 
 # ── 키보드 그리기 ─────────────────────────────────────────────
@@ -410,48 +422,101 @@ def drawAll(
 
     return np.array(img_pil)
 
-def draw_gaze_cursor(img, gaze_x, gaze_y, fixation_count):
-    """시선 커서 및 십자선 렌더링."""
- 
+def draw_gaze_cursor(
+    img,
+    gaze_x,
+    gaze_y,
+    fixation_count
+):
+    """PNG 커서 렌더링"""
+
     if gaze_x < 0:
         return img
- 
-    cursor_color = (
-        (0, 255, 120)
-        if fixation_count >= FIXATION_FRAMES
-        else (0, 220, 255)
+
+    if cursor_img is None:
+        return img
+
+    cursor_size = 48
+
+    cursor = cv2.resize(
+        cursor_img,
+        (cursor_size, cursor_size)
     )
- 
-    cv2.circle(img, (gaze_x, gaze_y), 18, cursor_color, 2)
-    cv2.circle(img, (gaze_x, gaze_y), 5, cursor_color, -1)
- 
+
+    h, w = cursor.shape[:2]
+
+    x = gaze_x
+    y = gaze_y
+
+    if (
+        x + w > img.shape[1]
+        or
+        y + h > img.shape[0]
+        or
+        x < 0
+        or
+        y < 0
+    ):
+        return img
+
+    roi = img[y:y+h, x:x+w]
+
+    # PNG 투명도 처리
+
+    if cursor.shape[2] == 4:
+
+        alpha = cursor[:, :, 3] / 255.0
+
+        for c in range(3):
+
+            roi[:, :, c] = (
+                (1 - alpha) * roi[:, :, c]
+                +
+                alpha * cursor[:, :, c]
+            )
+
+    else:
+
+        roi[:] = cursor
+
+    # 좌표 출력
+
     cv2.putText(
         img,
         f"({gaze_x}, {gaze_y})",
-        (gaze_x + 20, gaze_y - 10),
+        (gaze_x + 55, gaze_y + 20),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
+        0.45,
         (255, 255, 255),
         1
     )
- 
-    cv2.line(img, (gaze_x - 26, gaze_y), (gaze_x + 26, gaze_y), cursor_color, 1)
-    cv2.line(img, (gaze_x, gaze_y - 26), (gaze_x, gaze_y + 26), cursor_color, 1)
- 
+
+    # 응시 고정 표시
+
+    if fixation_count >= FIXATION_FRAMES:
+
+        cv2.circle(
+            img,
+            (gaze_x + 15, gaze_y + 15),
+            5,
+            (0, 255, 120),
+            -1
+        )
+
     return img
  
  
 def draw_status_bar(img, is_korean, fixation_count):
     """하단 상태 바 렌더링."""
- 
+
     from src.config import DWELL_SEC
- 
+
     status = (
-        f"{'한글' if is_korean else 'ENG'}"
-        f"  |  드웰: {DWELL_SEC}s"
-        f"  |  고정: {fixation_count}f"
+        f"     Dwell: {DWELL_SEC}s"
+        f"  |  Fixation: {fixation_count}f"
     )
- 
+
+    # 영어/숫자는 OpenCV 사용 가능
     cv2.putText(
         img,
         status,
@@ -461,18 +526,19 @@ def draw_status_bar(img, is_korean, fixation_count):
         (150, 150, 150),
         1
     )
- 
-    cv2.putText(
-        img,
-        "r: 재캘리브레이션   q: 종료",
-        (20, SCREEN_H - 15),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (100, 100, 100),
-        1
+
+    # 한글은 PIL 사용
+    img_pil = Image.fromarray(img)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (20, SCREEN_H - 40),
+        "r : 재캘리브레이션   t : 시선정확도테스트   q : 종료",
+        font=small_font,
+        fill=(150, 150, 150)
     )
- 
-    return img
+
+    return np.array(img_pil)
  
  
 def draw_test_complete_overlay(img):
@@ -503,21 +569,21 @@ def draw_test_complete_overlay(img):
 def draw_text_area(img, current_text, target_text=None):
     """상단 텍스트 입력 영역 렌더링."""
  
-    cv2.rectangle(img, (40, 20), (SCREEN_W - 40, 100), (0, 0, 0), -1)
+    cv2.rectangle(img, (40, 80), (SCREEN_W - 40, 160), (0, 0, 0), -1)
  
     img_pil = Image.fromarray(img)
     draw = ImageDraw.Draw(img_pil)
  
     if target_text is not None:
         draw.text(
-            (55, 5),
+            (55, 12),
             f"입력 문장 : {target_text}",
             font=font,
             fill=(0, 255, 0)
         )
  
     draw.text(
-        (55, 25),
+        (55, 90),
         current_text,
         font=font,
         fill=(255, 255, 255)

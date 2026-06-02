@@ -1,5 +1,10 @@
 import cv2
 import numpy as np
+import csv
+import math
+import time
+import os
+from datetime import datetime
 
 import src.hangul as hangul
 
@@ -30,7 +35,7 @@ from src.tracking.dwell import DwellController
 from src.keyboard import (
     create_buttons,
     process_key,
-    keys_eng_normal
+    keys_kor_normal
 )
 
 from src.ui import (
@@ -46,6 +51,184 @@ from src.ui import (
 
 from tests.test_runner import TestRunner
 
+# 9점 테스트 (개발용)
+
+def run_gaze_accuracy_test(
+    cap,
+    face_mesh,
+    calibrator
+):
+
+    test_points = [
+
+        (0.1, 0.1),
+        (0.5, 0.1),
+        (0.9, 0.1),
+
+        (0.1, 0.5),
+        (0.5, 0.5),
+        (0.9, 0.5),
+
+        (0.1, 0.9),
+        (0.5, 0.9),
+        (0.9, 0.9),
+    ]
+
+    results = []
+
+    for idx, (rx, ry) in enumerate(test_points):
+
+        target_x = int(SCREEN_W * rx)
+        target_y = int(SCREEN_H * ry)
+
+        samples_x = []
+        samples_y = []
+
+        start_time = time.time()
+
+        while time.time() - start_time < 3.0:
+
+            ret, frame = cap.read()
+
+            if not ret:
+                continue
+
+            frame = cv2.flip(frame, 1)
+
+            rgb = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
+
+            result = face_mesh.process(rgb)
+
+            canvas = np.zeros(
+                (SCREEN_H, SCREEN_W, 3),
+                dtype=np.uint8
+            )
+
+            cv2.circle(
+                canvas,
+                (target_x, target_y),
+                20,
+                (0,255,255),
+                -1
+            )
+
+            if result.multi_face_landmarks:
+
+                lms = result.multi_face_landmarks[0]
+
+                iris_x, iris_y = get_avg_iris(lms)
+
+                sx, sy = calibrator.map_to_screen(
+                    iris_x,
+                    iris_y
+                )
+
+                elapsed = time.time() - start_time
+
+                if elapsed >= 1.0:
+                    
+                    samples_x.append(sx)
+                    samples_y.append(sy)
+
+            cv2.imshow(
+                "Eye Keyboard",
+                canvas
+            )
+
+            cv2.waitKey(1)
+
+        if len(samples_x) == 0:
+            continue
+
+        pred_x = np.mean(samples_x)
+        pred_y = np.mean(samples_y)
+
+        error = math.sqrt(
+            (pred_x-target_x)**2 +
+            (pred_y-target_y)**2
+        )
+
+        results.append([
+            idx+1,
+            target_x,
+            target_y,
+            pred_x,
+            pred_y,
+            error
+        ])
+
+    errors = [r[5] for r in results]
+
+    avg_error = np.mean(errors)
+    max_error = np.max(errors)
+    min_error = np.min(errors)
+    std_error = np.std(errors)
+
+    filename = datetime.now().strftime(
+        "gaze_accuracy_%Y%m%d_%H%M%S.csv"
+    )
+
+    filepath = os.path.join(
+        "gaze_accuracy_results",
+        filename
+    )
+
+    with open(
+        filepath,
+        "w",
+        newline="",
+        encoding="utf-8-sig"
+    ) as f:
+
+        writer = csv.writer(f)
+
+        writer.writerow([
+            "point",
+            "target_x",
+            "target_y",
+            "pred_x",
+            "pred_y",
+            "error_px"
+        ])
+
+        writer.writerows(results)
+
+        writer.writerow([])
+
+        writer.writerow([
+            "Average Error(px)",
+            avg_error
+        ])
+
+        writer.writerow([
+            "Max Error(px)",
+            max_error
+        ])
+
+        writer.writerow([
+            "Min Error(px)",
+            min_error
+        ])
+
+        writer.writerow([
+            "Std Error(px)",
+            std_error
+        ])
+
+    print(
+        f"\nCSV 저장 완료: {filepath}"
+    )
+
+    print("\n===== GAZE TEST =====")
+    print(f"Average Error : {avg_error:.2f}px")
+    print(f"Max Error : {max_error:.2f}px")
+    print(f"Min Error : {min_error:.2f}px")
+    print(f"Std Error : {std_error:.2f}px")
+    print("=====================")
+
 
 def main():
 
@@ -54,25 +237,38 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    cv2.namedWindow("Eye Keyboard", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Eye Keyboard", SCREEN_W, SCREEN_H)
+    cv2.namedWindow(
+        "Eye Keyboard",
+        cv2.WINDOW_NORMAL
+    )
+
+    cv2.setWindowProperty(
+        "Eye Keyboard",
+        cv2.WND_PROP_FULLSCREEN,
+        cv2.WINDOW_FULLSCREEN
+    )
 
     calibrator = Calibrator()
     gaze = GazePipeline()
     dwell = DwellController()
     tester = TestRunner()
 
-    is_korean = False
+    is_korean = True
     is_shift = False
 
-    buttonList = create_buttons(keys_eng_normal)
+    buttonList = create_buttons(keys_kor_normal)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
         dtype=np.uint8
     )
 
-    print("Eye Keyboard 시작 | r: 재캘리브레이션 | q: 종료")
+    print(
+        "Eye Keyboard 시작 | "
+        "r: 재캘리브레이션 | "
+        "t: 시선정확도테스트 | "
+        "q: 종료"
+    )
 
     with mp_face_mesh.FaceMesh(
         max_num_faces=1,
@@ -135,7 +331,7 @@ def main():
                         break
                     elif key == ord('r'):
                         calibrator.reset()
-
+                   
                     continue
 
                 # ── 시선 파이프라인 ───────────────────────────
@@ -201,6 +397,16 @@ def main():
 
                 if not show_countdown(cap, face_mesh):
                     break
+
+            elif key == ord('t'):
+
+                if calibrator.done:
+
+                    run_gaze_accuracy_test(
+                        cap,
+                        face_mesh,
+                        calibrator
+                    )
 
     cap.release()
     cv2.destroyAllWindows()
