@@ -31,6 +31,11 @@ font = ImageFont.truetype(
     FONT_SIZE
 )
 
+small_font = ImageFont.truetype(
+    FONT_PATH,
+    20
+)
+
 
 # ── 카운트다운 ────────────────────────────────────────────────
 
@@ -68,6 +73,7 @@ def show_countdown(cap, face_mesh):
         rgb.flags.writeable = True
 
         face_found = False
+        conf = 0
 
         if results.multi_face_landmarks:
 
@@ -96,7 +102,7 @@ def show_countdown(cap, face_mesh):
                 LEFT_IRIS_RING,
                 w,
                 h,
-                (0,200,255)
+                (0, 200, 255)
             )
 
             draw_iris_ring(
@@ -106,7 +112,7 @@ def show_countdown(cap, face_mesh):
                 RIGHT_IRIS_RING,
                 w,
                 h,
-                (0,200,255)
+                (0, 200, 255)
             )
 
             conf = iris_confidence(lms)
@@ -119,43 +125,33 @@ def show_countdown(cap, face_mesh):
 
             cv2.rectangle(
                 frame,
-                (20, h-50),
-                (w-20, h-36),
-                (50,50,50),
+                (20, h - 50),
+                (w - 20, h - 36),
+                (50, 50, 50),
                 -1
             )
 
             qcol = (
-                (0,200,80)
+                (0, 200, 80)
                 if conf > 0.5
-                else (0,140,255)
+                else (0, 140, 255)
             )
 
             cv2.rectangle(
                 frame,
-                (20,h-50),
-                (20+bw,h-36),
+                (20, h - 50),
+                (20 + bw, h - 36),
                 qcol,
                 -1
-            )
-
-            cv2.putText(
-                frame,
-                f"홍채 인식 품질: {int(conf*100)}%",
-                (20,h-56),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (200,200,200),
-                1
             )
 
         overlay = frame.copy()
 
         cv2.rectangle(
             overlay,
-            (0,0),
-            (w,60),
-            (10,10,10),
+            (0, 0),
+            (w, 70),
+            (10, 10, 10),
             -1
         )
 
@@ -167,42 +163,37 @@ def show_countdown(cap, face_mesh):
             0
         )
 
-        cv2.putText(
-            frame,
+        # ===== PIL 한글 출력 =====
+
+        img_pil = Image.fromarray(frame)
+        draw = ImageDraw.Draw(img_pil)
+
+        draw.text(
+            (15, 10),
             "카메라를 정면으로 바라봐 주세요",
-            (10,22),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (200,200,200),
-            1
+            font=font,
+            fill=(255, 255, 255)
         )
 
-        fc = (
-            (100,255,100)
-            if face_found
-            else (80,150,255)
+        draw.text(
+            (20, h - 80),
+            "얼굴 감지됨" if face_found else "얼굴을 찾는 중...",
+            font=small_font,
+            fill=(100, 255, 100) if face_found else (255, 180, 80)
         )
 
-        cv2.putText(
-            frame,
-            "얼굴 감지됨 ✓"
-            if face_found
-            else "얼굴을 찾는 중...",
-            (10,48),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            fc,
-            1
-        )
+        frame = np.array(img_pil)
+
+        # ===== 카운트다운 =====
 
         cv2.putText(
             frame,
-            str(int(remaining)+1),
-            (w-60,55),
+            str(int(remaining) + 1),
+            (w // 2 - 50, h // 2 + 50),
             cv2.FONT_HERSHEY_SIMPLEX,
-            2.0,
-            (0,220,255),
-            3
+            5,
+            (0, 220, 255),
+            8
         )
 
         display = cv2.resize(
@@ -307,15 +298,17 @@ def draw_calib_screen(
             -1
         )
 
-    cv2.putText(
-        canvas,
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (20, sh - 35),
         "r: 재시작   q: 종료",
-        (20, sh-10),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        (100,100,100),
-        1
+        font=small_font,
+        fill=(120, 120, 120)
     )
+
+    canvas[:] = np.array(img_pil)
 
 
 # ── 키보드 그리기 ─────────────────────────────────────────────
@@ -443,15 +436,15 @@ def draw_gaze_cursor(img, gaze_x, gaze_y, fixation_count):
  
 def draw_status_bar(img, is_korean, fixation_count):
     """하단 상태 바 렌더링."""
- 
+
     from src.config import DWELL_SEC
- 
+
     status = (
-        f"{'한글' if is_korean else 'ENG'}"
-        f"  |  드웰: {DWELL_SEC}s"
-        f"  |  고정: {fixation_count}f"
+        f"     Dwell: {DWELL_SEC}s"
+        f"  |  Fixation: {fixation_count}f"
     )
- 
+
+    # 영어/숫자는 OpenCV 사용 가능
     cv2.putText(
         img,
         status,
@@ -461,18 +454,19 @@ def draw_status_bar(img, is_korean, fixation_count):
         (150, 150, 150),
         1
     )
- 
-    cv2.putText(
-        img,
+
+    # 한글은 PIL 사용
+    img_pil = Image.fromarray(img)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (20, SCREEN_H - 40),
         "r: 재캘리브레이션   q: 종료",
-        (20, SCREEN_H - 15),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (100, 100, 100),
-        1
+        font=small_font,
+        fill=(150, 150, 150)
     )
- 
-    return img
+
+    return np.array(img_pil)
  
  
 def draw_test_complete_overlay(img):
