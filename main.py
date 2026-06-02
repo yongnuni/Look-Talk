@@ -30,7 +30,7 @@ from src.tracking.dwell import DwellController
 from src.keyboard import (
     create_buttons,
     process_key,
-    keys_eng_normal
+    keys_kor_normal
 )
 
 from src.ui import (
@@ -54,18 +54,26 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    cv2.namedWindow("Eye Keyboard", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Eye Keyboard", SCREEN_W, SCREEN_H)
+    cv2.namedWindow(
+        "Eye Keyboard",
+        cv2.WINDOW_NORMAL
+    )
+
+    cv2.setWindowProperty(
+        "Eye Keyboard",
+        cv2.WND_PROP_FULLSCREEN,
+        cv2.WINDOW_FULLSCREEN
+    )
 
     calibrator = Calibrator()
     gaze = GazePipeline()
     dwell = DwellController()
     tester = TestRunner()
 
-    is_korean = False
+    is_korean = True
     is_shift = False
 
-    buttonList = create_buttons(keys_eng_normal)
+    buttonList = create_buttons(keys_kor_normal)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
