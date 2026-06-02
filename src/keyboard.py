@@ -58,7 +58,7 @@ def create_buttons(keys):
     button_w = 75
     button_h = 65
 
-    top_margin = 120
+    top_margin = 180
     vertical_gap = 78
 
     special_widths = {

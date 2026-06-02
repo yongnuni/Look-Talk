@@ -1,9 +1,15 @@
 import cv2
 import time
 import numpy as np
+import os
 
 from PIL import ImageFont, ImageDraw, Image
 from src.config import SCREEN_W, SCREEN_H, FIXATION_FRAMES
+
+cursor_img = cv2.imread(
+    os.path.join("assets", "cursor.png"),
+    cv2.IMREAD_UNCHANGED
+)
 
 from src.config import (
     FONT_PATH,
@@ -168,9 +174,22 @@ def show_countdown(cap, face_mesh):
         img_pil = Image.fromarray(frame)
         draw = ImageDraw.Draw(img_pil)
 
+        message = "카메라를 정면으로 바라봐 주세요"
+
+        bbox = draw.textbbox(
+            (0, 0),
+            message,
+            font=font
+        )
+
+        text_w = bbox[2] - bbox[0]
+
         draw.text(
-            (15, 10),
-            "카메라를 정면으로 바라봐 주세요",
+            (
+                (w - text_w) // 2,
+                10
+            ),
+            message,
             font=font,
             fill=(255, 255, 255)
         )
@@ -403,34 +422,87 @@ def drawAll(
 
     return np.array(img_pil)
 
-def draw_gaze_cursor(img, gaze_x, gaze_y, fixation_count):
-    """시선 커서 및 십자선 렌더링."""
- 
+def draw_gaze_cursor(
+    img,
+    gaze_x,
+    gaze_y,
+    fixation_count
+):
+    """PNG 커서 렌더링"""
+
     if gaze_x < 0:
         return img
- 
-    cursor_color = (
-        (0, 255, 120)
-        if fixation_count >= FIXATION_FRAMES
-        else (0, 220, 255)
+
+    if cursor_img is None:
+        return img
+
+    cursor_size = 48
+
+    cursor = cv2.resize(
+        cursor_img,
+        (cursor_size, cursor_size)
     )
- 
-    cv2.circle(img, (gaze_x, gaze_y), 18, cursor_color, 2)
-    cv2.circle(img, (gaze_x, gaze_y), 5, cursor_color, -1)
- 
+
+    h, w = cursor.shape[:2]
+
+    x = gaze_x
+    y = gaze_y
+
+    if (
+        x + w > img.shape[1]
+        or
+        y + h > img.shape[0]
+        or
+        x < 0
+        or
+        y < 0
+    ):
+        return img
+
+    roi = img[y:y+h, x:x+w]
+
+    # PNG 투명도 처리
+
+    if cursor.shape[2] == 4:
+
+        alpha = cursor[:, :, 3] / 255.0
+
+        for c in range(3):
+
+            roi[:, :, c] = (
+                (1 - alpha) * roi[:, :, c]
+                +
+                alpha * cursor[:, :, c]
+            )
+
+    else:
+
+        roi[:] = cursor
+
+    # 좌표 출력
+
     cv2.putText(
         img,
         f"({gaze_x}, {gaze_y})",
-        (gaze_x + 20, gaze_y - 10),
+        (gaze_x + 55, gaze_y + 20),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
+        0.45,
         (255, 255, 255),
         1
     )
- 
-    cv2.line(img, (gaze_x - 26, gaze_y), (gaze_x + 26, gaze_y), cursor_color, 1)
-    cv2.line(img, (gaze_x, gaze_y - 26), (gaze_x, gaze_y + 26), cursor_color, 1)
- 
+
+    # 응시 고정 표시
+
+    if fixation_count >= FIXATION_FRAMES:
+
+        cv2.circle(
+            img,
+            (gaze_x + 15, gaze_y + 15),
+            5,
+            (0, 255, 120),
+            -1
+        )
+
     return img
  
  
@@ -461,7 +533,7 @@ def draw_status_bar(img, is_korean, fixation_count):
 
     draw.text(
         (20, SCREEN_H - 40),
-        "r: 재캘리브레이션   q: 종료",
+        "r : 재캘리브레이션   t : 시선정확도테스트   q : 종료",
         font=small_font,
         fill=(150, 150, 150)
     )
@@ -497,21 +569,21 @@ def draw_test_complete_overlay(img):
 def draw_text_area(img, current_text, target_text=None):
     """상단 텍스트 입력 영역 렌더링."""
  
-    cv2.rectangle(img, (40, 20), (SCREEN_W - 40, 100), (0, 0, 0), -1)
+    cv2.rectangle(img, (40, 80), (SCREEN_W - 40, 160), (0, 0, 0), -1)
  
     img_pil = Image.fromarray(img)
     draw = ImageDraw.Draw(img_pil)
  
     if target_text is not None:
         draw.text(
-            (55, 5),
+            (55, 12),
             f"입력 문장 : {target_text}",
             font=font,
             fill=(0, 255, 0)
         )
  
     draw.text(
-        (55, 25),
+        (55, 90),
         current_text,
         font=font,
         fill=(255, 255, 255)
