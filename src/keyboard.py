@@ -235,3 +235,11 @@ def process_key(key, is_korean, is_shift, buttonList):
         is_shift,
         buttonList
     )
+
+def get_button_center(buttonList, key_name):
+    for btn in buttonList:
+        if btn.text == key_name:
+            cx = btn.pos[0] + btn.size[0] / 2
+            cy = btn.pos[1] + btn.size[1] / 2
+            return (cx, cy)
+    return None
