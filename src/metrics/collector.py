@@ -28,11 +28,11 @@ class MetricsCollector:
 
     SCHEMA_VERSION = "1.0"
 
-    def __init__(self, user_id="anonymous", app_version="v0.1-raw"):
+    def __init__(self, user_id="anonymous", dev_version="v0.1-raw"):
         # 세션 단위 메타데이터 (sessions.csv 한 행)
         self.session_id = str(uuid.uuid4())
         self.user_id = user_id
-        self.app_version = app_version
+        self.dev_version = dev_version
         self.start_timestamp = datetime.now(timezone.utc).isoformat()
         self.end_timestamp = None
 
@@ -167,14 +167,14 @@ class MetricsCollector:
             self.end_session()
 
         session_fields = [
-            "session_id", "user_id", "app_version",
+            "session_id", "user_id", "dev_version",
             "start_timestamp", "end_timestamp",
             "session_duration_total_ms", "schema_version",
         ]
         session_row = {
             "session_id": self.session_id,
             "user_id": self.user_id,
-            "app_version": self.app_version,
+            "dev_version": self.dev_version,
             "start_timestamp": self.start_timestamp,
             "end_timestamp": self.end_timestamp,
             "session_duration_total_ms": self._compute_duration_ms(),
