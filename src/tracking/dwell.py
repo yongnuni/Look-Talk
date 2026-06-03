@@ -1,4 +1,6 @@
+from math import dist
 import time
+import numpy as np
 
 from src.config import DWELL_SEC
 
@@ -9,6 +11,7 @@ class DwellController:
         self.dwell_key = None
         self.dwell_start = None
         self.cooldown_end = 0
+        self.hover_lock_button = None
 
     def update(self, gaze_x, gaze_y, buttonList):
         """
@@ -30,17 +33,66 @@ class DwellController:
             self.dwell_start = None
             return hovered_key, dwell_ratio, clicked_key
 
+        closest_button = None
+        closest_dist = float("inf")
+
+        assist_radius = 35
+        if self.dwell_key is not None:
+             lock_radius = 60
+        else:
+            lock_radius = 40
+
         for button in buttonList:
+
             bx, by = button.pos
             bw, bh = button.size
 
-            if (
-                bx < gaze_x < bx + bw
-                and
-                by < gaze_y < by + bh
-            ):
-                hovered_key = button.text
-                break
+            center_x = bx + bw / 2
+            center_y = by + bh / 2
+
+            dist = (
+                (gaze_x - center_x) ** 2 +
+                (gaze_y - center_y) ** 2
+            ) ** 0.5
+
+            if dist < closest_dist:
+                closest_dist = dist
+                closest_button = button
+
+
+
+            if self.hover_lock_button is not None:
+
+                bx, by = self.hover_lock_button.pos
+                bw, bh = self.hover_lock_button.size
+
+                center_x = bx + bw / 2
+                center_y = by + bh / 2
+
+                dist = np.hypot(
+                    gaze_x - center_x,
+                    gaze_y - center_y
+                )
+
+                if dist < lock_radius:
+                    hovered_key = self.hover_lock_button.text
+                else:
+                    if dist < lock_radius:
+                         hovered_key = self.hover_lock_button.text
+                    else:
+                        self.hover_lock_button = None
+
+
+            if hovered_key is None:
+
+                if (
+                    closest_button is not None
+                    and
+                    closest_dist < assist_radius
+                ):
+
+                    hovered_key = closest_button.text
+                    self.hover_lock_button = closest_button
 
         if hovered_key:
 
