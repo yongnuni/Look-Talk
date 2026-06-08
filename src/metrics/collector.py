@@ -37,13 +37,11 @@ class MetricsCollector:
     # ── 측정 상태 조회 (main.py가 내부 변수 직접 참조하지 않도록) ──
 
     def is_measuring(self):
-        """현재 타깃이 열려 있는지(=샘플을 받을 상태인지) 반환."""
         return self._current is not None
 
     # ── 타깃 시작 ──────────────────────────────────────────
 
     def start_target(self, target_index, target_x_px, target_y_px):
-        """새 타깃 응시 시작. 이전 버퍼를 비우고 정답 좌표를 기록한다."""
         self._current = {
             "target_index": target_index,
             "target_x_px": target_x_px,
@@ -54,16 +52,30 @@ class MetricsCollector:
             "iris_ys": [],
             "valid_count": 0,   # 추적 성공 프레임 (오차 계산에 쓰임)
             "total_count": 0,   # 전체 프레임 (성공 + 실패)
+
+            # ── STB-01~04용 프레임 단위 통계 ──
+            "total_frames": 0,          # 전체 프레임 (모든 STB 분모)
+            "face_detected_frames": 0,  # 얼굴 검출 성공 (STB-02 성공률 / STB-03 실패율)
+            "gaze_valid_frames": 0,     # 시선까지 유효 (STB-04 Dropout)
+            "frame_times": [],          # 각 프레임 시각 (STB-01 FPS)
         }
 
     # ── 매 프레임 샘플 ─────────────────────────────────────
 
-    def add_sample(self, gaze_x, gaze_y, iris_x, iris_y):
-        """매 프레임 호출. 현재 타깃 버퍼에 예측·홍채 좌표를 쌓는다.
+    def add_frame(self, face_detected, gaze_valid, timestamp):
+        if self._current is None:
+            return
 
-        gaze_x/y: GazePipeline 최종 좌표 (사용자가 실제 경험하는 시선 위치)
-        iris_x/y: get_avg_iris() 홍채 중심 (STB-04 신호 안정성용)
-        """
+        self._current["total_frames"] += 1
+        self._current["frame_times"].append(timestamp)
+
+        if face_detected:
+            self._current["face_detected_frames"] += 1
+
+        if gaze_valid:
+            self._current["gaze_valid_frames"] += 1
+
+    def add_sample(self, gaze_x, gaze_y, iris_x, iris_y):
         if self._current is None:
             return
 
@@ -84,7 +96,6 @@ class MetricsCollector:
     # ── 타깃 종료 (지표 계산) ──────────────────────────────
 
     def end_target(self):
-        """현재 타깃 응시 종료. 쌓인 좌표로 지표를 계산해 target_rows에 한 행 추가."""
         if self._current is None:
             return
 
@@ -92,7 +103,17 @@ class MetricsCollector:
         total = c["total_count"]
         valid = c["valid_count"]
 
-        # STB-02 Dropout Rate
+        # ── STB-01~04: 프레임 단위 통계 (add_frame 기반) ──
+        f_total = c["total_frames"]
+        f_face = c["face_detected_frames"]
+        f_gaze = c["gaze_valid_frames"]
+
+        stb01_fps = self._compute_fps(c["frame_times"])
+        stb02_landmark_rate = round(f_face / f_total, 4) if f_total > 0 else None
+        stb03_face_fail = round((f_total - f_face) / f_total, 4) if f_total > 0 else None
+        stb04_dropout = round((f_total - f_gaze) / f_total, 4) if f_total > 0 else None
+
+        # STB-04 Dropout Rate
         dropout_rate = (total - valid) / total if total > 0 else None
 
         # 유효 프레임이 하나도 없으면 오차 계산 불가 → 실패 행으로 기록
@@ -111,6 +132,10 @@ class MetricsCollector:
                 "iris_std_x_px": None,
                 "iris_std_y_px": None,
                 "dropout_rate": round(dropout_rate, 4) if dropout_rate is not None else None,
+                "stb01_fps": stb01_fps,
+                "stb02_landmark_rate": stb02_landmark_rate,
+                "stb03_face_fail_rate": stb03_face_fail,
+                "stb04_dropout_rate": stb04_dropout,
                 "sample_count": 0,
             })
             self._current = None
@@ -144,6 +169,10 @@ class MetricsCollector:
             "iris_std_x_px": round(iris_std_x, 2),
             "iris_std_y_px": round(iris_std_y, 2),
             "dropout_rate": round(dropout_rate, 4),
+            "stb01_fps": stb01_fps,
+            "stb02_landmark_rate": stb02_landmark_rate,
+            "stb03_face_fail_rate": stb03_face_fail,
+            "stb04_dropout_rate": stb04_dropout,
             "sample_count": valid,
         })
         self._current = None
@@ -151,12 +180,10 @@ class MetricsCollector:
     # ── 세션 종료 / 내보내기 ───────────────────────────────
 
     def end_session(self):
-        """세션 종료 시각 기록. export 전에 호출."""
         self.end_timestamp = datetime.now(timezone.utc).isoformat()
 
     def export_csv(self, sessions_path="sessions.csv",
                    accuracy_path="gaze_accuracy.csv"):
-        """메모리에 쌓인 지표를 두 CSV 파일에 append 모드로 내보낸다."""
         if self.end_timestamp is None:
             self.end_session()
 
@@ -184,7 +211,10 @@ class MetricsCollector:
             "euclidean_error_px", "euclidean_error_cm",
             "gaze_std_x_px", "gaze_std_y_px",
             "iris_std_x_px", "iris_std_y_px",
-            "dropout_rate", "sample_count",
+            "dropout_rate",
+            "stb01_fps", "stb02_landmark_rate",
+            "stb03_face_fail_rate", "stb04_dropout_rate",
+            "sample_count",
         ]
         self._append_rows(accuracy_path, accuracy_fields, self.target_rows)
 
@@ -196,10 +226,25 @@ class MetricsCollector:
         return int((end - start).total_seconds() * 1000)
     
     def _to_cm(self, error_px):
-        """px 오차를 cm로 환산. px_per_cm이 없으면 None."""
         if error_px is None or self.px_per_cm is None or self.px_per_cm == 0:
             return None
         return round(error_px / self.px_per_cm, 3)
+    
+    def _compute_fps(self, frame_times):
+        if len(frame_times) < 2:
+            return None
+
+        intervals = [
+            frame_times[i] - frame_times[i - 1]
+            for i in range(1, len(frame_times))
+        ]
+        # 0 이하 간격(중복 시각 등)은 제외해 0으로 나누기 방어
+        fps_values = [1.0 / dt for dt in intervals if dt > 0]
+
+        if not fps_values:
+            return None
+
+        return round(statistics.mean(fps_values), 2)
 
     def _append_rows(self, path, fieldnames, rows):
         file_exists = os.path.isfile(path)
