@@ -50,13 +50,16 @@ from src.ui import (
 )
 
 from tests.test_runner import TestRunner
+from src.metrics.collector import MetricsCollector
 
 # 9점 테스트 (개발용)
 
 def run_gaze_accuracy_test(
     cap,
     face_mesh,
-    calibrator
+    calibrator,
+    gaze,
+    collector
 ):
 
     test_points = [
@@ -80,6 +83,8 @@ def run_gaze_accuracy_test(
 
         target_x = int(SCREEN_W * rx)
         target_y = int(SCREEN_H * ry)
+
+        collector.start_target(idx, target_x, target_y)
 
         samples_x = []
         samples_y = []
@@ -126,12 +131,18 @@ def run_gaze_accuracy_test(
                     iris_y
                 )
 
+                blink = is_blink(lms)
+                conf = iris_confidence(lms)
+                gaze_x, gaze_y, _ = gaze.update(sx, sy, conf, blink)
+
                 elapsed = time.time() - start_time
 
                 if elapsed >= 1.0:
                     
                     samples_x.append(sx)
                     samples_y.append(sy)
+
+                    collector.add_sample(gaze_x, gaze_y, iris_x, iris_y)
 
             cv2.imshow(
                 "Eye Keyboard",
@@ -141,6 +152,7 @@ def run_gaze_accuracy_test(
             cv2.waitKey(1)
 
         if len(samples_x) == 0:
+            collector.end_target()
             continue
 
         pred_x = np.mean(samples_x)
@@ -159,6 +171,8 @@ def run_gaze_accuracy_test(
             pred_y,
             error
         ])
+
+        collector.end_target()
 
     errors = [r[5] for r in results]
 
@@ -228,6 +242,16 @@ def run_gaze_accuracy_test(
     print(f"Min Error : {min_error:.2f}px")
     print(f"Std Error : {std_error:.2f}px")
     print("=====================")
+
+    # ── collector 내보내기 ──
+    out_dir = "gaze_accuracy_results"
+
+    collector.end_session()
+    collector.export_csv(
+        sessions_path=os.path.join(out_dir, "sessions.csv"),
+        accuracy_path=os.path.join(out_dir, "gaze_accuracy.csv")
+    )
+    print("[metrics] collector CSV 저장 완료:", out_dir)
 
 
 def main():
@@ -402,10 +426,18 @@ def main():
 
                 if calibrator.done:
 
+                    gaze.reset()
+                    collector = MetricsCollector(
+                        user_id="jeesoo",
+                        dev_version="v0.1-raw"
+                    )
+
                     run_gaze_accuracy_test(
                         cap,
                         face_mesh,
-                        calibrator
+                        calibrator,
+                        gaze,
+                        collector
                     )
 
     cap.release()
