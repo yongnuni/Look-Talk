@@ -10,7 +10,8 @@ import src.hangul as hangul
 
 from src.config import (
     SCREEN_W,
-    SCREEN_H
+    SCREEN_H,
+    PX_PER_CM
 )
 
 from src.tracking.eye_tracking import (
@@ -429,7 +430,8 @@ def main():
                     gaze.reset()
                     collector = MetricsCollector(
                         user_id="jeesoo",
-                        dev_version="v0.1-raw"
+                        dev_version="v0.1-raw",
+                        px_per_cm=PX_PER_CM
                     )
 
                     run_gaze_accuracy_test(

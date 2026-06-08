@@ -1,4 +1,4 @@
-"""채널 A(시선 정확도) 지표 수집 모듈.
+"""시선 정확도 지표 수집 모듈.
 
 기존 MVP 코드와 분리된 독립 모듈이며, main.py에 훅으로 연결된다.
 '목표 키의 화면 좌표 = 정답 좌표'로 두고, 사용자가 그 키를 노리는 동안의
@@ -8,12 +8,6 @@
 - 세션 1개  -> sessions.csv 한 행 (메타데이터)
 - 타깃 N개  -> gaze_accuracy.csv N행 (지표 본체)
 두 파일은 session_id로 연결된다.
-
-산출 지표 (1순위)
-- ACC-05 Euclidean Error : 정답 좌표와 예측 평균의 직선 거리(px)
-- STB-03 시선 좌표 분산   : 예측 좌표의 표준편차 (떨림)
-- STB-04 홍채 중심 표준편차: 입력 신호 자체의 흔들림 (오차 하한선)
-- STB-02 Dropout Rate     : 전체 프레임 중 추적 실패 비율
 """
 
 import os
@@ -26,20 +20,18 @@ from datetime import datetime, timezone
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.0"
+    SCHEMA_VERSION = "1.1"
 
-    def __init__(self, user_id="anonymous", dev_version="v0.1-raw"):
-        # 세션 단위 메타데이터 (sessions.csv 한 행)
+    def __init__(self, user_id="anonymous", dev_version="v0.1-raw", px_per_cm=None):
+    # 세션 단위 메타데이터 (sessions.csv 한 행)
         self.session_id = str(uuid.uuid4())
         self.user_id = user_id
         self.dev_version = dev_version
+        self.px_per_cm = px_per_cm
         self.start_timestamp = datetime.now(timezone.utc).isoformat()
         self.end_timestamp = None
 
-        # 타깃별 결과 누적 (gaze_accuracy.csv 여러 행)
         self.target_rows = []
-
-        # 현재 응시 중인 타깃의 임시 버퍼
         self._current = None
 
     # ── 측정 상태 조회 (main.py가 내부 변수 직접 참조하지 않도록) ──
@@ -113,6 +105,7 @@ class MetricsCollector:
                 "pred_x_px": None,
                 "pred_y_px": None,
                 "euclidean_error_px": None,
+                "euclidean_error_cm": None,
                 "gaze_std_x_px": None,
                 "gaze_std_y_px": None,
                 "iris_std_x_px": None,
@@ -145,6 +138,7 @@ class MetricsCollector:
             "pred_x_px": round(pred_x, 2),
             "pred_y_px": round(pred_y, 2),
             "euclidean_error_px": round(euclidean_error_px, 2),
+            "euclidean_error_cm": self._to_cm(euclidean_error_px),
             "gaze_std_x_px": round(gaze_std_x, 2),
             "gaze_std_y_px": round(gaze_std_y, 2),
             "iris_std_x_px": round(iris_std_x, 2),
@@ -169,7 +163,7 @@ class MetricsCollector:
         session_fields = [
             "session_id", "user_id", "dev_version",
             "start_timestamp", "end_timestamp",
-            "session_duration_total_ms", "schema_version",
+            "session_duration_total_ms", "px_per_cm", "schema_version",
         ]
         session_row = {
             "session_id": self.session_id,
@@ -178,6 +172,7 @@ class MetricsCollector:
             "start_timestamp": self.start_timestamp,
             "end_timestamp": self.end_timestamp,
             "session_duration_total_ms": self._compute_duration_ms(),
+            "px_per_cm": round(self.px_per_cm, 3) if self.px_per_cm else None,
             "schema_version": self.SCHEMA_VERSION,
         }
         self._append_rows(sessions_path, session_fields, [session_row])
@@ -186,7 +181,7 @@ class MetricsCollector:
             "session_id", "target_index",
             "target_x_px", "target_y_px",
             "pred_x_px", "pred_y_px",
-            "euclidean_error_px",
+            "euclidean_error_px", "euclidean_error_cm",
             "gaze_std_x_px", "gaze_std_y_px",
             "iris_std_x_px", "iris_std_y_px",
             "dropout_rate", "sample_count",
@@ -199,6 +194,12 @@ class MetricsCollector:
         start = datetime.fromisoformat(self.start_timestamp)
         end = datetime.fromisoformat(self.end_timestamp)
         return int((end - start).total_seconds() * 1000)
+    
+    def _to_cm(self, error_px):
+        """px 오차를 cm로 환산. px_per_cm이 없으면 None."""
+        if error_px is None or self.px_per_cm is None or self.px_per_cm == 0:
+            return None
+        return round(error_px / self.px_per_cm, 3)
 
     def _append_rows(self, path, fieldnames, rows):
         file_exists = os.path.isfile(path)
