@@ -29,9 +29,15 @@ from src.tracking.eye_tracking import (
     draw_iris_ring
 )
 
+from src.tracking.mouth import (
+    MouthClickDetector,
+    draw_mouth
+)
+
 from src.tracking.calibration import Calibrator
 from src.tracking.gaze_pipeline import GazePipeline
 from src.tracking.dwell import DwellController
+from src.tracking.mouth import draw_mouth
 
 from src.keyboard import (
     create_buttons,
@@ -276,6 +282,7 @@ def main():
     calibrator = Calibrator()
     gaze = GazePipeline()
     dwell = DwellController()
+    mouth = MouthClickDetector()
     tester = TestRunner()
 
     is_korean = True
@@ -326,6 +333,11 @@ def main():
             gaze_y = -1
             fixation_count = 0
             elapsed_ratio = 0.0
+            mouth_click = False
+            hovered_key = None
+            clicked_key = None
+            dwell_ratio = 0.0
+            mar = 0.0
 
             if results.multi_face_landmarks:
 
@@ -335,10 +347,12 @@ def main():
                 draw_eye_contour(frame, lms, RIGHT_EYE, fw, fh)
                 draw_iris_ring(frame, lms, LEFT_IRIS, LEFT_IRIS_RING, fw, fh, (0, 200, 255))
                 draw_iris_ring(frame, lms, RIGHT_IRIS, RIGHT_IRIS_RING, fw, fh, (0, 200, 255))
+                draw_mouth(frame,lms,fw,fh)
 
                 iris_x, iris_y = get_avg_iris(lms)
                 blink = is_blink(lms)
-                conf = iris_confidence(lms)
+                conf = iris_confidence(lms)                
+                
 
                 # ── 캘리브레이션 ──────────────────────────────
 
@@ -367,20 +381,43 @@ def main():
 
             # ── 드웰 클릭 ─────────────────────────────────────
 
-            hovered_key, dwell_ratio, clicked_key = dwell.update(
-                gaze_x, gaze_y, buttonList
-            )
+                hovered_key, dwell_ratio, clicked_key = dwell.update(
+                    gaze_x,
+                    gaze_y,
+                    buttonList
+                )
+                mouth_click, mar = mouth.update(
+                    lms,
+                    hovered_key
+                )
+                
 
-            if clicked_key:
 
-                tester.on_key_press(clicked_key)
+                # 기존 드웰 클릭
+                if clicked_key:
+                    tester.on_key_press(clicked_key)
 
-                (is_korean, is_shift, buttonList) = process_key(
+                    (is_korean, is_shift, buttonList) = process_key(
                     clicked_key,
                     is_korean,
                     is_shift,
                     buttonList
-                )
+                    )
+
+                # 입벌림 클릭
+                if mouth_click and hovered_key:
+
+                    tester.on_key_press(hovered_key)
+
+                    (is_korean, is_shift, buttonList) = process_key(
+                    hovered_key,
+                    is_korean,
+                    is_shift,
+                    buttonList
+                    )
+
+                    print("MOUTH INPUT:", hovered_key)
+                    
 
             # ── 렌더링 ────────────────────────────────────────
 
@@ -405,6 +442,17 @@ def main():
 
             if tester.is_showing_complete():
                 kbd_bg = draw_test_complete_overlay(kbd_bg)
+            
+            mar_text = f"MAR: {mar:.2f}"   #입벌림 지표 표시
+            cv2.putText(
+                kbd_bg,
+                mar_text,
+                (SCREEN_W // 2 - 60, SCREEN_H - 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 100, 0),
+                2
+            )
 
             kbd_bg = draw_gaze_cursor(kbd_bg, gaze_x, gaze_y, fixation_count)
             kbd_bg = draw_status_bar(kbd_bg, is_korean, fixation_count)
