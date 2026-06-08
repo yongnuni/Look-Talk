@@ -19,7 +19,7 @@ from src.config import (
     COUNTDOWN_SEC,
     CALIB_POINTS
 )
-
+from src.tracking.mouth import draw_mouth
 from src.tracking.eye_tracking import (
     LEFT_EYE,
     RIGHT_EYE,
@@ -119,6 +119,12 @@ def show_countdown(cap, face_mesh):
                 w,
                 h,
                 (0, 200, 255)
+            )
+            draw_mouth(
+                frame,
+                lms,
+                w,
+                h
             )
 
             conf = iris_confidence(lms)
