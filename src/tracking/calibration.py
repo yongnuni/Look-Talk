@@ -4,9 +4,12 @@ import time
 
 from src.config import (
     CALIB_POINTS,
-    CALIB_HOLD_SEC,
     SCREEN_W,
-    SCREEN_H
+    SCREEN_H,
+    CALIB_STABILIZE_SEC,
+    CALIB_COLLECT_SEC,
+    CALIB_STD_X,
+    CALIB_STD_Y
 )
 
 
@@ -30,6 +33,9 @@ class Calibrator:
 
         self.hold_start = None
 
+        self.warning = ""
+        self.warning_start = None
+
     def update(
         self,
         iris_x,
@@ -44,7 +50,10 @@ class Calibrator:
 
         elapsed = now - self.hold_start
 
-        if conf > 0.4:
+        if (
+            elapsed >= CALIB_STABILIZE_SEC
+            and conf > 0.4
+        ):
 
             self.samples.append(
                 (
@@ -53,8 +62,10 @@ class Calibrator:
                 )
             )
 
-        if elapsed >= CALIB_HOLD_SEC:
-
+        if elapsed >= (
+            CALIB_STABILIZE_SEC +
+            CALIB_COLLECT_SEC
+        ):
             if len(self.samples) > 5:
 
                 xs = sorted(
@@ -112,6 +123,30 @@ class Calibrator:
                 ]
             )
 
+            xs_raw = [s[0] for s in self.samples]
+            ys_raw = [s[1] for s in self.samples]
+
+            std_x = np.std(xs_raw)
+            std_y = np.std(ys_raw)
+
+            if (
+                std_x > CALIB_STD_X
+                or std_y > CALIB_STD_Y
+            ):
+
+                self.warning = "시선이 불안정합니다"
+                self.warning_start = time.time()
+
+                self.samples = []
+                self.hold_start = None
+
+                return elapsed / (
+                    CALIB_STABILIZE_SEC +
+                    CALIB_COLLECT_SEC
+                )
+
+            self.warning = ""
+
             self.idx += 1
 
             self.samples = []
@@ -137,7 +172,10 @@ class Calibrator:
 
                 self.done = True
 
-        return elapsed / CALIB_HOLD_SEC
+        return elapsed / (
+            CALIB_STABILIZE_SEC +
+            CALIB_COLLECT_SEC
+        )
 
     def map_to_screen(
         self,
