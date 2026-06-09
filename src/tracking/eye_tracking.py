@@ -42,15 +42,20 @@ RIGHT_IRIS_RING = [
 
 def get_avg_iris(landmarks):
 
-    lx = landmarks.landmark[LEFT_IRIS].x
-    ly = landmarks.landmark[LEFT_IRIS].y
+    lm = landmarks.landmark
 
-    rx = landmarks.landmark[RIGHT_IRIS].x
-    ry = landmarks.landmark[RIGHT_IRIS].y
+    left_points = [468, 469, 470, 471, 472]
+    right_points = [473, 474, 475, 476, 477]
+
+    left_x = np.mean([lm[i].x for i in left_points])
+    left_y = np.mean([lm[i].y for i in left_points])
+
+    right_x = np.mean([lm[i].x for i in right_points])
+    right_y = np.mean([lm[i].y for i in right_points])
 
     return (
-        (lx + rx) / 2,
-        (ly + ry) / 2
+        (left_x + right_x) / 2,
+        (left_y + right_y) / 2
     )
 
 
