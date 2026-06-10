@@ -47,6 +47,7 @@ from src.keyboard import (
 
 from src.ui import (
     show_countdown,
+    show_calibration_guide,
     draw_calib_screen,
     drawAll,
     draw_gaze_cursor,
@@ -146,8 +147,8 @@ def run_gaze_accuracy_test(
 
                 if elapsed >= 1.0:
                     
-                    samples_x.append(sx)
-                    samples_y.append(sy)
+                    samples_x.append(gaze_x)
+                    samples_y.append(gaze_y)
 
                     collector.add_sample(gaze_x, gaze_y, iris_x, iris_y)
 
@@ -317,6 +318,8 @@ def main():
             cap.release()
             cv2.destroyAllWindows()
             return
+        
+        show_calibration_guide()
 
         while cap.isOpened():
 
@@ -677,6 +680,8 @@ def main():
                 use_pose_corrected = not use_pose_corrected
                 gaze.reset()
                 print("use_pose_corrected:", use_pose_corrected)
+
+                show_calibration_guide()
 
             elif key == ord('t'):
 

@@ -55,7 +55,10 @@ class Calibrator:
 
         elapsed = now - self.hold_start
 
+<<<<<<< HEAD
         # 안정화 시간이 지난 뒤부터 샘플 수집
+=======
+>>>>>>> develop
         if (
             elapsed >= CALIB_STABILIZE_SEC
             and conf > 0.4
@@ -68,6 +71,7 @@ class Calibrator:
                 )
             )
 
+<<<<<<< HEAD
             if head_pose is not None and head_pose.get("valid", False):
                 self.pose_samples.append(
                     (
@@ -81,11 +85,16 @@ class Calibrator:
                     )
                 )
 
+=======
+>>>>>>> develop
         if elapsed >= (
             CALIB_STABILIZE_SEC +
             CALIB_COLLECT_SEC
         ):
+<<<<<<< HEAD
 
+=======
+>>>>>>> develop
             if len(self.samples) > 5:
 
                 xs = sorted(
@@ -185,6 +194,30 @@ class Calibrator:
                 ]
             )
 
+            xs_raw = [s[0] for s in self.samples]
+            ys_raw = [s[1] for s in self.samples]
+
+            std_x = np.std(xs_raw)
+            std_y = np.std(ys_raw)
+
+            if (
+                std_x > CALIB_STD_X
+                or std_y > CALIB_STD_Y
+            ):
+
+                self.warning = "시선이 불안정합니다"
+                self.warning_start = time.time()
+
+                self.samples = []
+                self.hold_start = None
+
+                return elapsed / (
+                    CALIB_STABILIZE_SEC +
+                    CALIB_COLLECT_SEC
+                )
+
+            self.warning = ""
+
             self.idx += 1
 
             self.samples = []
@@ -230,6 +263,7 @@ class Calibrator:
             CALIB_STABILIZE_SEC +
             CALIB_COLLECT_SEC
         )
+<<<<<<< HEAD
 
     def get_pose_delta(self, head_pose):
         """
@@ -415,6 +449,8 @@ class Calibrator:
         """
 
         return screen_x, screen_y
+=======
+>>>>>>> develop
 
     def map_to_screen(
         self,
