@@ -61,6 +61,14 @@ SMOOTH_ALPHA = 0.20
 COUNTDOWN_SEC = 3
 DWELL_SEC = 1.2
 
+# 캘리브레이션 안정화
+CALIB_STABILIZE_SEC = 1.0   # 점 응시 안정화
+CALIB_COLLECT_SEC = 2.0     # 실제 데이터 수집
+
+# 시선 편차 허용 범위
+CALIB_STD_X = 0.008
+CALIB_STD_Y = 0.008
+
 # ── 시선 안정화 설정 ──────────────────────────────────────────
 
 FIXATION_RADIUS = 40
