@@ -45,7 +45,6 @@ def get_avg_iris(landmarks):
     """
     양쪽 홍채 중심의 평균 좌표를 반환합니다.
 
-<<<<<<< HEAD
     develop 기준 정확도가 높았던 방식입니다.
     MediaPipe의 홍채 중심점과 홍채 테두리 랜드마크를 함께 사용해
     카메라 화면 기준 절대 홍채 좌표를 계산합니다.
@@ -96,22 +95,6 @@ def get_avg_iris(landmarks):
     return (
         float((left_x + right_x) / 2),
         float((left_y + right_y) / 2)
-=======
-    lm = landmarks.landmark
-
-    left_points = [468, 469, 470, 471, 472]
-    right_points = [473, 474, 475, 476, 477]
-
-    left_x = np.mean([lm[i].x for i in left_points])
-    left_y = np.mean([lm[i].y for i in left_points])
-
-    right_x = np.mean([lm[i].x for i in right_points])
-    right_y = np.mean([lm[i].y for i in right_points])
-
-    return (
-        (left_x + right_x) / 2,
-        (left_y + right_y) / 2
->>>>>>> develop
     )
 
 

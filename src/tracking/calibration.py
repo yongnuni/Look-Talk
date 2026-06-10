@@ -55,10 +55,7 @@ class Calibrator:
 
         elapsed = now - self.hold_start
 
-<<<<<<< HEAD
         # 안정화 시간이 지난 뒤부터 샘플 수집
-=======
->>>>>>> develop
         if (
             elapsed >= CALIB_STABILIZE_SEC
             and conf > 0.4
@@ -71,7 +68,6 @@ class Calibrator:
                 )
             )
 
-<<<<<<< HEAD
             if head_pose is not None and head_pose.get("valid", False):
                 self.pose_samples.append(
                     (
@@ -85,16 +81,10 @@ class Calibrator:
                     )
                 )
 
-=======
->>>>>>> develop
         if elapsed >= (
             CALIB_STABILIZE_SEC +
             CALIB_COLLECT_SEC
         ):
-<<<<<<< HEAD
-
-=======
->>>>>>> develop
             if len(self.samples) > 5:
 
                 xs = sorted(
@@ -263,7 +253,6 @@ class Calibrator:
             CALIB_STABILIZE_SEC +
             CALIB_COLLECT_SEC
         )
-<<<<<<< HEAD
 
     def get_pose_delta(self, head_pose):
         """
@@ -449,8 +438,6 @@ class Calibrator:
         """
 
         return screen_x, screen_y
-=======
->>>>>>> develop
 
     def map_to_screen(
         self,
