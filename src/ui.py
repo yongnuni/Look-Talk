@@ -326,6 +326,38 @@ def draw_calib_screen(
     img_pil = Image.fromarray(canvas)
     draw = ImageDraw.Draw(img_pil)
 
+    if (
+        hasattr(calib, "warning")
+        and calib.warning
+        and calib.warning_start
+        and time.time() - calib.warning_start < 1.0
+    ):
+
+        text = "시선이 불안정합니다"
+
+        bbox = draw.textbbox(
+            (0, 0),
+            text,
+            font=font
+        )
+
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+
+        draw.text(
+            (
+                (sw - tw) // 2,
+                (sh - th) // 2
+            ),
+            text,
+            font=font,
+            fill=(255, 80, 80)
+        )
+
+        canvas[:] = np.array(img_pil)
+
+        return
+
     draw.text(
         (20, sh - 35),
         "r: 재시작   q: 종료",
@@ -596,3 +628,51 @@ def draw_text_area(img, current_text, target_text=None):
     )
  
     return np.array(img_pil)
+
+# 캘리브레이션 가이드 안내 문구
+def show_calibration_guide():
+
+    start = time.time()
+
+    while True:
+
+        canvas = np.zeros(
+            (SCREEN_H, SCREEN_W, 3),
+            dtype=np.uint8
+        )
+
+        img_pil = Image.fromarray(canvas)
+        draw = ImageDraw.Draw(img_pil)
+
+        text = "점을 계속 바라보세요"
+
+        bbox = draw.textbbox(
+            (0, 0),
+            text,
+            font=font
+        )
+
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+
+        draw.text(
+            (
+                (SCREEN_W - tw) // 2,
+                (SCREEN_H - th) // 2
+            ),
+            text,
+            font=font,
+            fill=(255,255,255)
+        )
+
+        canvas = np.array(img_pil)
+
+        cv2.imshow(
+            "Eye Keyboard",
+            canvas
+        )
+
+        if time.time() - start >= 2.0:
+            break
+
+        cv2.waitKey(1)

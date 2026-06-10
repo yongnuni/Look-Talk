@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+
 # ── MediaPipe 초기화 ──────────────────────────────────────────
 
 mp_face_mesh = mp.solutions.face_mesh
@@ -41,16 +42,59 @@ RIGHT_IRIS_RING = [
 # ── 홍채 중심 계산 ───────────────────────────────────────────
 
 def get_avg_iris(landmarks):
+    """
+    양쪽 홍채 중심의 평균 좌표를 반환합니다.
 
-    lx = landmarks.landmark[LEFT_IRIS].x
-    ly = landmarks.landmark[LEFT_IRIS].y
+    develop 기준 정확도가 높았던 방식입니다.
+    MediaPipe의 홍채 중심점과 홍채 테두리 랜드마크를 함께 사용해
+    카메라 화면 기준 절대 홍채 좌표를 계산합니다.
 
-    rx = landmarks.landmark[RIGHT_IRIS].x
-    ry = landmarks.landmark[RIGHT_IRIS].y
+    3D-aware 보정은 여기서 하지 않고,
+    calibration.py의 compensate_iris_by_head_pose()에서
+    face_center / face_scale 정보를 이용해 적용합니다.
+    """
+
+    lm = landmarks.landmark
+
+    left_points = [
+        468,
+        469,
+        470,
+        471,
+        472
+    ]
+
+    right_points = [
+        473,
+        474,
+        475,
+        476,
+        477
+    ]
+
+    left_x = np.mean([
+        lm[i].x
+        for i in left_points
+    ])
+
+    left_y = np.mean([
+        lm[i].y
+        for i in left_points
+    ])
+
+    right_x = np.mean([
+        lm[i].x
+        for i in right_points
+    ])
+
+    right_y = np.mean([
+        lm[i].y
+        for i in right_points
+    ])
 
     return (
-        (lx + rx) / 2,
-        (ly + ry) / 2
+        float((left_x + right_x) / 2),
+        float((left_y + right_y) / 2)
     )
 
 
@@ -233,7 +277,7 @@ def draw_eye_contour(
         frame,
         [points],
         True,
-        (147,112,219),
+        (147, 112, 219),
         1
     )
 
@@ -263,7 +307,6 @@ def draw_iris_ring(
     if ring_indices:
 
         points = [
-
             (
                 int(
                     landmarks.landmark[i].x
@@ -274,19 +317,16 @@ def draw_iris_ring(
                     * height
                 )
             )
-
             for i in ring_indices
         ]
 
         radii = [
-
             int(
                 np.hypot(
                     p[0] - center_x,
                     p[1] - center_y
                 )
             )
-
             for p in points
         ]
 
