@@ -184,30 +184,6 @@ class Calibrator:
                 ]
             )
 
-            xs_raw = [s[0] for s in self.samples]
-            ys_raw = [s[1] for s in self.samples]
-
-            std_x = np.std(xs_raw)
-            std_y = np.std(ys_raw)
-
-            if (
-                std_x > CALIB_STD_X
-                or std_y > CALIB_STD_Y
-            ):
-
-                self.warning = "시선이 불안정합니다"
-                self.warning_start = time.time()
-
-                self.samples = []
-                self.hold_start = None
-
-                return elapsed / (
-                    CALIB_STABILIZE_SEC +
-                    CALIB_COLLECT_SEC
-                )
-
-            self.warning = ""
-
             self.idx += 1
 
             self.samples = []
