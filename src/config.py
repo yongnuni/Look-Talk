@@ -15,6 +15,19 @@ SCREEN_H = root.winfo_screenheight()
 
 root.destroy()
 
+# ── 화면 물리 정보 (ACC-06 cm 환산용) ──────────────────
+# 풀스크린이고 SCREEN_W/H가 실제 모니터 px 해상도이므로,
+# 9점 테스트 오차 px와 같은 좌표계 → 별도 보정 불필요.
+# 수동 입력 필요한 값은 대각 인치 하나뿐.
+# 정식 웹캠 모니터 도착하면 그 값으로 교체. 분산 테스트 중엔 각자 자기 기기 값으로.
+
+MONITOR_DIAGONAL_INCH = 16.0   # ← 측정자가 자기 모니터 대각 크기(인치)로 수정
+
+# px_per_cm = 대각선 px / 대각선 cm
+_diag_px = (SCREEN_W ** 2 + SCREEN_H ** 2) ** 0.5
+_diag_cm = MONITOR_DIAGONAL_INCH * 2.54
+PX_PER_CM = _diag_px / _diag_cm
+
 # ── 캘리브레이션 설정 ─────────────────────────────────────────
 
 MARGIN = 0.08

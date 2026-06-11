@@ -10,7 +10,8 @@ import src.hangul as hangul
 
 from src.config import (
     SCREEN_W,
-    SCREEN_H
+    SCREEN_H,
+    PX_PER_CM
 )
 
 from src.tracking.eye_tracking import (
@@ -107,6 +108,11 @@ def run_gaze_accuracy_test(
 
             frame = cv2.flip(frame, 1)
 
+            # ── 프레임 단위 기본값 (STB 신호용) ──
+            face_detected = False
+            gaze_x = -1
+            gaze_y = -1
+
             rgb = cv2.cvtColor(
                 frame,
                 cv2.COLOR_BGR2RGB
@@ -130,6 +136,7 @@ def run_gaze_accuracy_test(
             if result.multi_face_landmarks:
 
                 lms = result.multi_face_landmarks[0]
+                face_detected = True
 
                 iris_x, iris_y = get_avg_iris(lms)
 
@@ -150,6 +157,14 @@ def run_gaze_accuracy_test(
                     samples_y.append(gaze_y)
 
                     collector.add_sample(gaze_x, gaze_y, iris_x, iris_y)
+
+            # ── STB 프레임 통계 기록 (얼굴 미검출 프레임도 포함) ──
+            gaze_valid = (gaze_x >= 0 and gaze_y >= 0)
+            collector.add_frame(
+                face_detected=face_detected,
+                gaze_valid=gaze_valid,
+                timestamp=time.time()
+            )
 
             cv2.imshow(
                 "Eye Keyboard",
@@ -482,7 +497,8 @@ def main():
                     gaze.reset()
                     collector = MetricsCollector(
                         user_id="jeesoo",
-                        dev_version="v0.1-raw"
+                        dev_version="v0.1-raw",
+                        px_per_cm=PX_PER_CM
                     )
 
                     run_gaze_accuracy_test(
