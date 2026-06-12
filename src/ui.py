@@ -571,7 +571,7 @@ def draw_status_bar(img, is_korean, fixation_count):
 
     draw.text(
         (20, SCREEN_H - 40),
-        "r : 재캘리브레이션   t : 시선정확도테스트   q : 종료",
+        "r : 재캘리브레이션   t : 시선정확도테스트   m : 입벌림 입력 방식 변경   q : 종료",
         font=small_font,
         fill=(150, 150, 150)
     )

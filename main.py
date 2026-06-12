@@ -391,6 +391,9 @@ def main():
     is_korean = True
     is_shift = False
     use_pose_corrected = False
+
+    mouth_mode = False
+
     last_session_id = None
 
     last_gaze_x = SCREEN_W // 2
@@ -407,6 +410,7 @@ def main():
         "Eye Keyboard 시작 | "
         "r: 재캘리브레이션 | "
         "t: 시선정확도테스트 | "
+        "m: 입벌림 입력 방식 변경 | "
         "q: 종료"
     )
 
@@ -519,7 +523,7 @@ def main():
                    
                     continue
                 # ── 입벌림 캘리브레이션 ─────────────────────────
-                if not mouth_calibrator.done:
+                if mouth_mode and not mouth_calibrator.done:
                     mar = mouth_aspect_ratio(lms)
                     mouth_progress = mouth_calibrator.update(mar)
                     if mouth_calibrator.done:
@@ -826,6 +830,12 @@ def main():
 
                 show_calibration_guide()
 
+            elif key == ord('m'):
+                mouth_mode = True
+                mouth_calibrator.reset()
+
+                print("입벌림 캘리브레이션 시작")
+
             elif key == ord('t'):
 
                  if calibrator.done:
@@ -838,10 +848,8 @@ def main():
                         version_name = "v0.1-raw"
 
                     collector = MetricsCollector(
-                        user_id="heewon",
-                        dev_version=version_name
-                        user_id="jeesoo",
-                        dev_version="v0.1-raw",
+                        user_id="yejin",
+                        dev_version=version_name,
                         px_per_cm=PX_PER_CM
                     )
 
