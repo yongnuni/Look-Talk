@@ -676,3 +676,68 @@ def show_calibration_guide():
             break
 
         cv2.waitKey(1)
+        
+def draw_mouth_calibration_screen(
+    instruction,
+    mar,
+    progress,
+    remaining
+):
+    canvas = np.zeros(
+        (SCREEN_H, SCREEN_W, 3),
+        dtype=np.uint8
+    )
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    title = "입벌림 캘리브레이션"
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 220),
+        title,
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 150),
+        instruction,
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 60),
+        f"MAR: {mar:.3f}",
+        font=small_font,
+        fill=(255, 180, 80),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 20),
+        f"진행률: {progress:.2f}",
+        font=small_font,
+        fill=(200, 200, 200),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 + 20),
+        f"남은 시간: {remaining:.1f}초",
+        font=small_font,
+        fill=(0, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (20, SCREEN_H - 40),
+        "r : 다시하기   q : 종료",
+        font=small_font,
+        fill=(150, 150, 150)
+    )
+
+    return np.array(img_pil)

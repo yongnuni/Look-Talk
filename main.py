@@ -5,12 +5,15 @@ import math
 import time
 import os
 from datetime import datetime
+from PIL import Image, ImageDraw
+from src.calibrations.baseline_manager import save_baseline
 
 import src.hangul as hangul
 
 from src.config import (
     SCREEN_W,
-    SCREEN_H
+    SCREEN_H,
+    PX_PER_CM
 )
 
 from src.tracking.eye_tracking import (
@@ -30,10 +33,12 @@ from src.tracking.eye_tracking import (
 
 from src.tracking.mouth import (
     MouthClickDetector,
-    draw_mouth
+    draw_mouth,
+    mouth_aspect_ratio
 )
 
 from src.tracking.calibration import Calibrator
+from src.calibrations.mouth_calibration import MouthCalibration
 from src.tracking.gaze_pipeline import GazePipeline
 from src.tracking.dwell import DwellController
 from src.tracking.mouth import draw_mouth
@@ -54,6 +59,7 @@ from src.ui import (
     draw_status_bar,
     draw_test_complete_overlay,
     draw_text_area,
+    draw_mouth_calibration_screen,
     font
 )
 
@@ -110,6 +116,11 @@ def run_gaze_accuracy_test(
 
             frame = cv2.flip(frame, 1)
 
+            # ── 프레임 단위 기본값 (STB 신호용) ──
+            face_detected = False
+            gaze_x = -1
+            gaze_y = -1
+
             rgb = cv2.cvtColor(
                 frame,
                 cv2.COLOR_BGR2RGB
@@ -133,6 +144,7 @@ def run_gaze_accuracy_test(
             if result.multi_face_landmarks:
 
                 lms = result.multi_face_landmarks[0]
+                face_detected = True
 
                 iris_x, iris_y = get_avg_iris(lms)
 
@@ -203,6 +215,14 @@ def run_gaze_accuracy_test(
                             iris_x,
                             iris_y
                         )
+
+            # ── STB 프레임 통계 기록 (얼굴 미검출 프레임도 포함) ──
+            gaze_valid = (gaze_x >= 0 and gaze_y >= 0)
+            collector.add_frame(
+                face_detected=face_detected,
+                gaze_valid=gaze_valid,
+                timestamp=time.time()
+            )
 
             cv2.imshow(
                 "Eye Keyboard",
@@ -339,6 +359,7 @@ def main():
     )
 
     calibrator = Calibrator()
+    mouth_calibrator = MouthCalibration()
     gaze = GazePipeline()
     dwell = DwellController()
     mouth = MouthClickDetector()
@@ -472,6 +493,46 @@ def main():
                     elif key == ord('r'):
                         calibrator.reset()
                    
+                    continue
+                # ── 입벌림 캘리브레이션 ─────────────────────────
+                if not mouth_calibrator.done:
+                    mar = mouth_aspect_ratio(lms)
+                    mouth_progress = mouth_calibrator.update(mar)
+                    if mouth_calibrator.done:
+                        mouth_result = mouth_calibrator.get_result_dict()
+
+                        print("\n===== MOUTH CALIBRATION RESULT =====")
+                        print(mouth_result)
+                        print("====================================\n")
+
+                        saved_path = save_baseline(
+                            mouth_result=mouth_result
+                    )
+
+                        print(f"[baseline] 저장 완료: {saved_path}")
+                        mouth = MouthClickDetector()
+                        dwell.reset()
+
+                    instruction = mouth_calibrator.get_instruction()
+                    remaining = mouth_calibrator.get_remaining_time()
+
+                    mouth_canvas = draw_mouth_calibration_screen(
+                        instruction,
+                        mar,
+                        mouth_progress,
+                        remaining
+                    )
+
+                    cv2.imshow("Eye Keyboard", mouth_canvas)
+
+                    key = cv2.waitKey(1) & 0xFF
+
+                    if key == ord('q'):
+                        break
+
+                    elif key == ord('r'):
+                        mouth_calibrator.reset()
+
                     continue
 
                 # ── 시선 파이프라인 ───────────────────────────
@@ -755,6 +816,9 @@ def main():
                     collector = MetricsCollector(
                         user_id="heewon",
                         dev_version=version_name
+                        user_id="jeesoo",
+                        dev_version="v0.1-raw",
+                        px_per_cm=PX_PER_CM
                     )
 
                     run_gaze_accuracy_test(

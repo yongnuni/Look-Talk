@@ -1,0 +1,21 @@
+{
+  "calibration_version": "v1",
+  "saved_at": "2026-06-12T10:12:24.845270",
+  "mouth": {
+    "mar_baseline": 0.007042026130670536,
+    "activation_threshold": 0.08704202613067054,
+    "mouth_success_rate": 0.0,
+    "activation_amplitude_mean": 0.0,
+    "activation_duration_mean": 0.0,
+    "open_close_speed_mean": 0.0,
+    "mouth_consistency": 0.0,
+    "mouth_contrast_ratio": 0.0,
+    "mouth_false_trigger_rate": 0.0,
+    "amplitude_decay": 0.0,
+    "mouth_min_hold_duration": 0.15,
+    "mouth_init_score": 0.0,
+    "total_trials": 5,
+    "success_count": 0,
+    "false_trigger_count": 0
+  }
+}
