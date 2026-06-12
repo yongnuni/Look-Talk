@@ -67,8 +67,10 @@ def run_gaze_accuracy_test(
     face_mesh,
     calibrator,
     gaze,
-    collector
+    collector,
+    use_pose_corrected
 ):
+    os.makedirs("gaze_accuracy_results", exist_ok=True)
 
     test_points = [
 
@@ -134,23 +136,73 @@ def run_gaze_accuracy_test(
 
                 iris_x, iris_y = get_avg_iris(lms)
 
-                sx, sy = calibrator.map_to_screen(
+                fh, fw = frame.shape[:2]
+
+                head_pose = estimate_head_pose(
+                    lms,
+                    fw,
+                    fh
+                )
+
+                # Raw 좌표
+                raw_sx, raw_sy = calibrator.map_to_screen(
                     iris_x,
                     iris_y
                 )
 
+                # 머리 자세 보정 좌표
+                corrected_iris_x, corrected_iris_y = (
+                    calibrator.compensate_iris_by_head_pose(
+                        iris_x,
+                        iris_y,
+                        head_pose
+                    )
+                )
+
+                corrected_sx, corrected_sy = calibrator.map_to_screen(
+                    corrected_iris_x,
+                    corrected_iris_y
+                )
+
+                if use_pose_corrected:
+                    sx, sy = corrected_sx, corrected_sy
+                else:
+                    sx, sy = raw_sx, raw_sy
+
                 blink = is_blink(lms)
                 conf = iris_confidence(lms)
-                gaze_x, gaze_y, _ = gaze.update(sx, sy, conf, blink)
+
+                gaze_x, gaze_y, _ = gaze.update(
+                    sx,
+                    sy,
+                    conf,
+                    blink,
+                    head_pose=head_pose
+                )
 
                 elapsed = time.time() - start_time
 
+                
                 if elapsed >= 1.0:
-                    
-                    samples_x.append(gaze_x)
-                    samples_y.append(gaze_y)
 
-                    collector.add_sample(gaze_x, gaze_y, iris_x, iris_y)
+                    tracking_valid = (
+                        gaze_x is not None
+                        and gaze_y is not None
+                        and np.isfinite(gaze_x)
+                        and np.isfinite(gaze_y)
+                        and not (gaze_x == -1 and gaze_y == -1)
+                    )
+
+                    if tracking_valid:
+                        samples_x.append(gaze_x)
+                        samples_y.append(gaze_y)
+
+                        collector.add_sample(
+                            gaze_x,
+                            gaze_y,
+                            iris_x,
+                            iris_y
+                        )
 
             cv2.imshow(
                 "Eye Keyboard",
@@ -189,8 +241,14 @@ def run_gaze_accuracy_test(
     min_error = np.min(errors)
     std_error = np.std(errors)
 
+    mode_name = (
+        "pose_corrected"
+        if use_pose_corrected
+        else "raw"
+    )
+
     filename = datetime.now().strftime(
-        "gaze_accuracy_%Y%m%d_%H%M%S.csv"
+        f"gaze_accuracy_{mode_name}_%Y%m%d_%H%M%S.csv"
     )
 
     filepath = os.path.join(
@@ -685,12 +743,18 @@ def main():
 
             elif key == ord('t'):
 
-                if calibrator.done:
+                 if calibrator.done:
 
                     gaze.reset()
+
+                    if use_pose_corrected:
+                        version_name = "v0.1-pose-corrected"
+                    else:
+                        version_name = "v0.1-raw"
+
                     collector = MetricsCollector(
-                        user_id="jeesoo",
-                        dev_version="v0.1-raw"
+                        user_id="heewon",
+                        dev_version=version_name
                     )
 
                     run_gaze_accuracy_test(
@@ -698,7 +762,8 @@ def main():
                         face_mesh,
                         calibrator,
                         gaze,
-                        collector
+                        collector,
+                        use_pose_corrected
                     )
 
     cap.release()
