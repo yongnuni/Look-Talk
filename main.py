@@ -814,10 +814,8 @@ def main():
                         version_name = "v0.1-raw"
 
                     collector = MetricsCollector(
-                        user_id="heewon",
-                        dev_version=version_name
-                        user_id="jeesoo",
-                        dev_version="v0.1-raw",
+                        user_id="yejin",
+                        dev_version=version_name,
                         px_per_cm=PX_PER_CM
                     )
 
