@@ -7,6 +7,8 @@ import os
 from datetime import datetime
 from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline
+import viz
+import matplotlib.pyplot as plt
 
 import src.hangul as hangul
 
@@ -340,6 +342,27 @@ def run_gaze_accuracy_test(
     print("[metrics] collector CSV 저장 완료:", out_dir)
 
 
+# 테스트 결과 자동 시각화 (개발용)
+
+def show_session_popup(session_id):
+    try:
+        viz.setup_font()
+        df = viz.load_data("gaze_accuracy_results")
+        s = viz.get_session(df, session_id)
+
+        if len(s) == 0:
+            print(f"[popup] 세션을 찾을 수 없음: {session_id}")
+            return
+
+        print(viz.format_summary_line(viz.summarize_session(s)))
+
+        screen_w, screen_h = viz.infer_screen_size(df)
+        viz.plot_session_overview(s, screen_w, screen_h)
+        plt.show()
+
+    except Exception as e:
+        print(f"[popup] 시각화 실패: {e}")
+
 def main():
 
     cap = cv2.VideoCapture(0)
@@ -369,6 +392,10 @@ def main():
     is_shift = False
     use_pose_corrected = False
 
+    mouth_mode = False
+
+    last_session_id = None
+
     last_gaze_x = SCREEN_W // 2
     last_gaze_y = SCREEN_H // 2
 
@@ -383,6 +410,7 @@ def main():
         "Eye Keyboard 시작 | "
         "r: 재캘리브레이션 | "
         "t: 시선정확도테스트 | "
+        "m: 입벌림 입력 방식 변경 | "
         "q: 종료"
     )
 
@@ -495,7 +523,7 @@ def main():
                    
                     continue
                 # ── 입벌림 캘리브레이션 ─────────────────────────
-                if not mouth_calibrator.done:
+                if mouth_mode and not mouth_calibrator.done:
                     mar = mouth_aspect_ratio(lms)
                     mouth_progress = mouth_calibrator.update(mar)
                     if mouth_calibrator.done:
@@ -802,6 +830,12 @@ def main():
 
                 show_calibration_guide()
 
+            elif key == ord('m'):
+                mouth_mode = True
+                mouth_calibrator.reset()
+
+                print("입벌림 캘리브레이션 시작")
+
             elif key == ord('t'):
 
                  if calibrator.done:
@@ -828,8 +862,14 @@ def main():
                         use_pose_corrected
                     )
 
+                    last_session_id = collector.session_id
+
     cap.release()
     cv2.destroyAllWindows()
+
+    # ── 종료 시 마지막 세션 결과 팝업 (측정한 적 있을 때만) ──
+    if last_session_id is not None:
+        show_session_popup(last_session_id)
 
 
 if __name__ == "__main__":
