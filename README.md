@@ -1,3 +1,5 @@
+📚 [팀노션](https://app.notion.com/p/31d7635a991d83b995cb01378ede55c7?source=copy_link)
+
 <Python 3.12.10>
 
 * Python 3.13은 사용하지 말 것!(해당 버전은 mediapipe를 사용할 수 없음)
