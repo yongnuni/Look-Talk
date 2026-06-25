@@ -102,24 +102,24 @@ class Calibrator:
                 lo = int(n * 0.2)
                 hi = int(n * 0.8)
 
-                avg_x = np.mean(
+                avg_x = np.median(
                     xs[lo:hi]
                 )
 
-                avg_y = np.mean(
+                avg_y = np.median(
                     ys[lo:hi]
                 )
 
             else:
 
-                avg_x = np.mean(
+                avg_x = np.median(
                     [
                         s[0]
                         for s in self.samples
                     ]
                 ) if self.samples else 0.5
 
-                avg_y = np.mean(
+                avg_y = np.median(
                     [
                         s[1]
                         for s in self.samples
