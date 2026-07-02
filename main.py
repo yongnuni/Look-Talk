@@ -214,8 +214,8 @@ def run_gaze_accuracy_test(
                         collector.add_sample(
                             gaze_x,
                             gaze_y,
-                            iris_x,
-                            iris_y
+                            iris_x * fw,
+                            iris_y * fh
                         )
 
             # ── STB 프레임 통계 기록 (얼굴 미검출 프레임도 포함) ──
@@ -336,8 +336,8 @@ def run_gaze_accuracy_test(
 
     collector.end_session()
     collector.export_csv(
-        sessions_path=os.path.join(out_dir, "sessions.csv"),
-        accuracy_path=os.path.join(out_dir, "gaze_accuracy.csv")
+        sessions_path=os.path.join(out_dir, f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"),
+        accuracy_path=os.path.join(out_dir, f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv")
     )
     print("[metrics] collector CSV 저장 완료:", out_dir)
 
@@ -850,7 +850,9 @@ def main():
                     collector = MetricsCollector(
                         user_id="yejin",
                         dev_version=version_name,
-                        px_per_cm=PX_PER_CM
+                        px_per_cm=PX_PER_CM,
+                        calib_id=calibrator.calib_id,
+                        calib_reproj_rmse_px=calibrator.calib_reproj_rmse_px,
                     )
 
                     run_gaze_accuracy_test(

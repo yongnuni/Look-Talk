@@ -1,7 +1,10 @@
 import cv2
 import numpy as np
+import os
 import time
+import uuid
 
+from src.metrics.csv_export import append_rows
 from src.config import (
     CALIB_POINTS,
     SCREEN_W,
@@ -15,6 +18,8 @@ from src.config import (
 
 class Calibrator:
 
+    CALIB_SCHEMA_VERSION = "1.0"
+
     def __init__(self):
         self.reset()
 
@@ -24,10 +29,15 @@ class Calibrator:
 
         self.samples = []
         self.pose_samples = []
+        self.sample_confs = []
 
         self.iris_pts = []
         self.screen_pts = []
         self.pose_pts = []
+
+        self.point_records = []
+        self.calib_id = str(uuid.uuid4())
+        self.calib_reproj_rmse_px = None
 
         self.pose_baseline = None
 
@@ -67,6 +77,7 @@ class Calibrator:
                     iris_y
                 )
             )
+            self.sample_confs.append(conf)
 
             if head_pose is not None and head_pose.get("valid", False):
                 self.pose_samples.append(
@@ -150,6 +161,7 @@ class Calibrator:
 
                 self.samples = []
                 self.pose_samples = []
+                self.sample_confs = []
                 self.hold_start = None
 
                 return elapsed / (
@@ -199,6 +211,7 @@ class Calibrator:
                 self.warning_start = time.time()
 
                 self.samples = []
+                self.sample_confs = []
                 self.hold_start = None
 
                 return elapsed / (
@@ -208,10 +221,30 @@ class Calibrator:
 
             self.warning = ""
 
+            mean_confidence = (
+                float(np.mean(self.sample_confs))
+                if self.sample_confs
+                else None
+            )
+
+            self.point_records.append(
+                {
+                    "calib_point_index": self.idx,
+                    "point_x_norm": sx,
+                    "point_y_norm": sy,
+                    "reproj_error_px": None,
+                    "iris_std_x_px": float(std_x),
+                    "iris_std_y_px": float(std_y),
+                    "sample_count": len(self.samples),
+                    "mean_confidence": mean_confidence,
+                }
+            )
+
             self.idx += 1
 
             self.samples = []
             self.pose_samples = []
+            self.sample_confs = []
             self.hold_start = None
 
             if self.idx >= len(CALIB_POINTS):
@@ -231,6 +264,38 @@ class Calibrator:
                     dst
                 )
 
+                # STB-11 재투영 오차: 학습에 쓴 홍채 좌표를 H로 다시 화면 좌표로
+                # 투영해 실제 타깃 좌표와의 거리를 잰다. map_to_screen()의 clip은
+                # 쓰지 않는다 (경계 밖 오차가 잘려 과소평가되는 것을 막기 위함).
+                # findHomography가 퇴화 대응점 등으로 None을 반환하면 계산을
+                # 건너뛰고 reproj_error_px는 None으로 남긴다 (STB-12/13은 유지).
+                if self.H is not None:
+
+                    reproj = cv2.perspectiveTransform(
+                        src.reshape(-1, 1, 2),
+                        self.H
+                    ).reshape(-1, 2)
+
+                    for i, rec in enumerate(self.point_records):
+                        pred_x, pred_y = reproj[i]
+                        target_x, target_y = self.screen_pts[i]
+
+                        rec["reproj_error_px"] = float(
+                            np.hypot(
+                                pred_x - target_x,
+                                pred_y - target_y
+                            )
+                        )
+
+                    # STB-11 세션 요약: 16점 재투영 오차의 RMSE
+                    self.calib_reproj_rmse_px = float(
+                        np.sqrt(
+                            np.mean(
+                                [rec["reproj_error_px"] ** 2 for rec in self.point_records]
+                            )
+                        )
+                    )
+
                 # 캘리브레이션 당시 평균 head pose baseline 저장
                 valid_pose_pts = [
                     p for p in self.pose_pts
@@ -246,6 +311,8 @@ class Calibrator:
                     self.pose_baseline = None
 
                 print("[calibration] pose_baseline:", self.pose_baseline)
+
+                self.export_calibration_quality_csv()
 
                 self.done = True
 
@@ -478,3 +545,62 @@ class Calibrator:
             screen_x,
             screen_y
         )
+
+    def export_calibration_quality_csv(
+        self,
+        path=None
+    ):
+        """
+        STB-11(재투영 오차)/STB-12(입력 신호 안정성)/STB-13(수집 품질)을
+        캘리브레이션 포인트당 1행으로 저장합니다. findHomography 직후 호출됩니다.
+        """
+
+        if path is None:
+            path = (
+                f"gaze_accuracy_results/calibration_quality_v"
+                f"{self.CALIB_SCHEMA_VERSION}.csv"
+            )
+
+        os.makedirs(
+            os.path.dirname(path),
+            exist_ok=True
+        )
+
+        fieldnames = [
+            "calib_id",
+            "calib_point_index",
+            "point_x_norm",
+            "point_y_norm",
+            "reproj_error_px",
+            "iris_std_x_px",
+            "iris_std_y_px",
+            "sample_count",
+            "mean_confidence",
+            "schema_version",
+        ]
+
+        rows = [
+            {
+                "calib_id": self.calib_id,
+                "calib_point_index": rec["calib_point_index"],
+                "point_x_norm": rec["point_x_norm"],
+                "point_y_norm": rec["point_y_norm"],
+                "reproj_error_px": (
+                    round(rec["reproj_error_px"], 2)
+                    if rec["reproj_error_px"] is not None
+                    else None
+                ),
+                "iris_std_x_px": round(rec["iris_std_x_px"], 5),
+                "iris_std_y_px": round(rec["iris_std_y_px"], 5),
+                "sample_count": rec["sample_count"],
+                "mean_confidence": (
+                    round(rec["mean_confidence"], 4)
+                    if rec["mean_confidence"] is not None
+                    else None
+                ),
+                "schema_version": self.CALIB_SCHEMA_VERSION,
+            }
+            for rec in self.point_records
+        ]
+
+        append_rows(path, fieldnames, rows)
