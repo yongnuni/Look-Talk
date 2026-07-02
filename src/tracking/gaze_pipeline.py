@@ -36,11 +36,11 @@ class GazePipeline:
         )
 
         self.kalman.processNoiseCov = (
-            np.eye(4, dtype=np.float32) * 0.008
+            np.eye(4, dtype=np.float32) * 0.003
         )
 
         self.kalman.measurementNoiseCov = (
-            np.eye(2, dtype=np.float32) * 1.0
+            np.eye(2, dtype=np.float32) * 0.3
         )
 
         self.initialized = False
@@ -153,10 +153,48 @@ class GazePipeline:
         sx_s = float(estimated[0][0])
         sy_s = float(estimated[1][0])
 
+        alpha = 0.35
+
+        if self.last_output is None:
+
+            self.last_output = [sx_s, sy_s]
+
+        else:
+
+            sx_s = (
+                alpha * sx_s
+                + (1-alpha) * self.last_output[0]
+            )
+
+            sy_s = (
+                alpha * sy_s
+                + (1-alpha) * self.last_output[1]
+            )
+
+            self.last_output = [sx_s, sy_s]
+
         if self.last_output is None:
             self.last_output = [sx_s, sy_s]
 
-        dead_zone = 20
+        velocity = np.hypot(
+
+            sx_s-self.last_output[0],
+
+            sy_s-self.last_output[1]
+
+        )
+
+        if velocity < 10:
+
+            dead_zone = 5
+
+        elif velocity < 40:
+
+            dead_zone = 10
+
+        else:
+
+            dead_zone = 20
 
         dist = np.hypot(
             sx_s - self.last_output[0],
