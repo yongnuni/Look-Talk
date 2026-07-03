@@ -59,7 +59,7 @@ def main():
     try:
         df = viz.load_data(args.results_dir)
     except FileNotFoundError:
-        print(f"[오류] CSV를 찾을 수 없습니다: {args.results_dir}/gaze_accuracy.csv")
+        print(f"[오류] CSV를 찾을 수 없습니다: {os.path.join(args.results_dir, viz.accuracy_filename())}")
         return
 
     if len(df) == 0:
