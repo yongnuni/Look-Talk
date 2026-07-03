@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline
-import viz
+import src.viz.viz as viz
 import matplotlib.pyplot as plt
 
 import src.hangul as hangul

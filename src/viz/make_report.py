@@ -5,23 +5,24 @@ gaze_accuracy_results/ 의 CSV를 읽어 최근 N세션의
 오차 지도·타깃별 막대·세션 추세 그래프를 PNG로 저장하고,
 각 세션의 핵심 지표를 콘솔에 한 줄씩 요약 출력한다.
 
-사용 예:
-    python make_report.py                 # 최근 1세션
-    python make_report.py -n 3            # 최근 3세션
-    python make_report.py --results-dir gaze_accuracy_results --out report
-    python make_report.py --session 139bfa88   # 특정 세션(앞자리 매칭)
-
-viz.py와 같은 폴더에 두고 실행한다.
+사용 예 (프로젝트 루트에서 터미널에 입력):
+    python -m src.viz.make_report                 # 최근 1세션
+    python -m src.viz.make_report -n 3            # 최근 3세션
+    python -m src.viz.make_report --results-dir gaze_accuracy_results --out report
+    python -m src.viz.make_report --session sessionid   # 특정 세션(앞자리 매칭)
+    python -m src.viz.make_report --calib                # 최신 캘리브레이션 품질 그래프
+    python -m src.viz.make_report --calib calibid       # 특정 캘리브레이션(앞자리 매칭)
 """
 
 import os
 import argparse
 
 import matplotlib
-matplotlib.use("Agg")  # 화면 없이 파일로만 저장 (서버/배치 환경 안전)
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import viz
+import src.viz.viz as viz
+import src.viz.calib_viz as calib_viz
 
 
 def save_session_figures(df, session_id, out_dir, screen_w, screen_h):
@@ -51,6 +52,9 @@ def main():
                         help="특정 세션만 (session_id 앞자리로 매칭)")
     parser.add_argument("--exclude", nargs="*", default=None,
                         help="분석 제외할 session_id 목록 (불량 데이터)")
+    parser.add_argument("--calib", nargs="?", const="latest", default=None,
+                        help="캘리브레이션 품질 그래프 저장. 값 없이 --calib만 쓰면 최신 "
+                             "캘리브레이션, --calib <ID>로 특정 calib_id(앞자리) 지정 가능")
     args = parser.parse_args()
 
     viz.setup_font()
@@ -107,8 +111,39 @@ def main():
         print("-" * 60)
         print(f"세션 추세 그래프 저장: {trend_path}")
 
+    # 캘리브레이션 품질 그래프 (--calib 시에만)
+    # sessions.csv와의 1:N 조인이 아니라 calibration_quality.csv 단독 조회라
+    # --session/-n/--exclude로 어떤 세션을 보든 이 부분은 영향받지 않는다.
+    # --calib (값 없음) -> 최신 캘리브레이션, --calib <id-prefix> -> 지정한 캘리브레이션
+    calib_saved = False
+    if args.calib is not None:
+        try:
+            calib_df = calib_viz.load_calibration_data(args.results_dir)
+            if args.calib == "latest":
+                target_calib = calib_viz.latest_calibration(calib_df)
+                calib_scope_msg = "(조회 중인 세션과 무관, 최신 캘리브레이션 기준)"
+            else:
+                target_calib = calib_viz.get_calibration_by_prefix(calib_df, args.calib)
+                calib_scope_msg = "(지정한 calib_id 기준)"
+        except FileNotFoundError:
+            print(f"[경고] calibration_quality CSV를 찾을 수 없습니다: "
+                  f"{os.path.join(args.results_dir, calib_viz.calibration_quality_filename())}")
+        except ValueError as e:
+            print(f"[경고] {e}")
+        else:
+            fig_calib = calib_viz.plot_calibration_overview(target_calib)
+            calib_id = target_calib["calib_id"].iloc[0]
+            short_calib = str(calib_id)[:8]
+            calib_path = os.path.join(args.out, f"{short_calib}_calib_overview.png")
+            fig_calib.savefig(calib_path, dpi=130, bbox_inches="tight")
+            plt.close(fig_calib)
+            print("-" * 60)
+            print(f"[{short_calib}] 캘리브레이션 품질 그래프 저장: {calib_path}")
+            print(calib_scope_msg)
+            calib_saved = True
+
     print("=" * 60)
-    n_png = len(target_ids) + (1 if len(target_ids) >= 2 else 0)
+    n_png = len(target_ids) + (1 if len(target_ids) >= 2 else 0) + (1 if calib_saved else 0)
     print(f"완료. PNG {n_png}개 저장됨 -> {args.out}/")
 
 
