@@ -4,6 +4,7 @@ __pycache__/
 *.csv
 *.json
 *.png
+*.pkl
 .vscode/
 .claude/
 CLAUDE.md
