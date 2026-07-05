@@ -2,4 +2,11 @@
 __pycache__/
 *.pyc
 *.csv
+*.json
+*.png
 .vscode/
+.claude/
+CLAUDE.md
+.calibration_results/
+.gaze_accuracy_results/
+.report/

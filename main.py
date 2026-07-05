@@ -7,6 +7,8 @@ import os
 from datetime import datetime
 from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline
+import viz
+import matplotlib.pyplot as plt
 
 import src.hangul as hangul
 
@@ -42,7 +44,7 @@ from src.calibrations.mouth_calibration import MouthCalibration
 from src.tracking.gaze_pipeline import GazePipeline
 from src.tracking.dwell import DwellController
 from src.tracking.mouth import draw_mouth
-from src.tracking.head_pose import estimate_head_pose
+from src.tracking.head_pose import estimate_head_pose, estimate_sqpnp_headpose
 
 from src.keyboard import (
     create_buttons,
@@ -66,6 +68,8 @@ from src.ui import (
 from tests.test_runner import TestRunner
 from src.metrics.collector import MetricsCollector
 
+MAX_SQPNP_DELTA_PX = 120
+
 # 9점 테스트 (개발용)
 
 def run_gaze_accuracy_test(
@@ -73,8 +77,18 @@ def run_gaze_accuracy_test(
     face_mesh,
     calibrator,
     gaze,
-    collector
+    collector,
+    use_pose_corrected,
+    use_sqpnp_corrected=False
 ):
+    os.makedirs("gaze_accuracy_results", exist_ok=True)
+
+    if use_sqpnp_corrected:
+        mode_name = "sqpnp_corrected"
+    elif use_pose_corrected:
+        mode_name = "pose_corrected"
+    else:
+        mode_name = "raw"
 
     test_points = [
 
@@ -146,23 +160,114 @@ def run_gaze_accuracy_test(
 
                 iris_x, iris_y = get_avg_iris(lms)
 
-                sx, sy = calibrator.map_to_screen(
+                fh, fw = frame.shape[:2]
+
+                head_pose = estimate_head_pose(
+                    lms,
+                    fw,
+                    fh
+                )
+
+                sqpnp_headpose = estimate_sqpnp_headpose(
+                    lms,
+                    fw,
+                    fh
+                )
+
+                # Raw 좌표
+                raw_sx, raw_sy = calibrator.map_to_screen(
                     iris_x,
                     iris_y
                 )
 
+                # 머리 자세 보정 좌표
+                corrected_iris_x, corrected_iris_y = (
+                    calibrator.compensate_iris_by_head_pose(
+                        iris_x,
+                        iris_y,
+                        head_pose
+                    )
+                )
+
+                corrected_sx, corrected_sy = calibrator.map_to_screen(
+                    corrected_iris_x,
+                    corrected_iris_y
+                )
+
+                sqpnp_corrected_iris_x, sqpnp_corrected_iris_y = (
+                    calibrator.compensate_iris_by_head_pose(
+                        iris_x,
+                        iris_y,
+                        sqpnp_headpose
+                    )
+                )
+
+                sqpnp_corrected_sx, sqpnp_corrected_sy = calibrator.map_to_screen(
+                    sqpnp_corrected_iris_x,
+                    sqpnp_corrected_iris_y
+                )
+
+                if (
+                    use_sqpnp_corrected
+                    and raw_sx is not None
+                    and raw_sy is not None
+                    and sqpnp_corrected_sx is not None
+                    and sqpnp_corrected_sy is not None
+                ):
+                    sqpnp_delta_x = np.clip(
+                        sqpnp_corrected_sx - raw_sx,
+                        -MAX_SQPNP_DELTA_PX,
+                        MAX_SQPNP_DELTA_PX
+                    )
+                    sqpnp_delta_y = np.clip(
+                        sqpnp_corrected_sy - raw_sy,
+                        -MAX_SQPNP_DELTA_PX,
+                        MAX_SQPNP_DELTA_PX
+                    )
+                    sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
+                    sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
+
+                if use_sqpnp_corrected:
+                    sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
+                elif use_pose_corrected:
+                    sx, sy = corrected_sx, corrected_sy
+                else:
+                    sx, sy = raw_sx, raw_sy
+
                 blink = is_blink(lms)
                 conf = iris_confidence(lms)
-                gaze_x, gaze_y, _ = gaze.update(sx, sy, conf, blink)
+
+                gaze_x, gaze_y, _ = gaze.update(
+                    sx,
+                    sy,
+                    conf,
+                    blink,
+                    head_pose=head_pose
+                )
 
                 elapsed = time.time() - start_time
 
+                
                 if elapsed >= 1.0:
-                    
-                    samples_x.append(gaze_x)
-                    samples_y.append(gaze_y)
 
-                    collector.add_sample(gaze_x, gaze_y, iris_x, iris_y)
+                    tracking_valid = (
+                        gaze_x is not None
+                        and gaze_y is not None
+                        and np.isfinite(gaze_x)
+                        and np.isfinite(gaze_y)
+                        and not (gaze_x == -1 and gaze_y == -1)
+                    )
+
+                    if tracking_valid:
+                        samples_x.append(gaze_x)
+                        samples_y.append(gaze_y)
+
+                        collector.add_sample(
+                            gaze_x,
+                            gaze_y,
+                            iris_x * fw,
+                            iris_y * fh
+                        )
 
             # ── STB 프레임 통계 기록 (얼굴 미검출 프레임도 포함) ──
             gaze_valid = (gaze_x >= 0 and gaze_y >= 0)
@@ -192,6 +297,7 @@ def run_gaze_accuracy_test(
         )
 
         results.append([
+            mode_name,
             idx+1,
             target_x,
             target_y,
@@ -202,7 +308,7 @@ def run_gaze_accuracy_test(
 
         collector.end_target()
 
-    errors = [r[5] for r in results]
+    errors = [r[6] for r in results]
 
     avg_error = np.mean(errors)
     max_error = np.max(errors)
@@ -210,7 +316,7 @@ def run_gaze_accuracy_test(
     std_error = np.std(errors)
 
     filename = datetime.now().strftime(
-        "gaze_accuracy_%Y%m%d_%H%M%S.csv"
+        f"gaze_accuracy_{mode_name}_%Y%m%d_%H%M%S.csv"
     )
 
     filepath = os.path.join(
@@ -228,6 +334,7 @@ def run_gaze_accuracy_test(
         writer = csv.writer(f)
 
         writer.writerow([
+            "mode",
             "point",
             "target_x",
             "target_y",
@@ -276,11 +383,32 @@ def run_gaze_accuracy_test(
 
     collector.end_session()
     collector.export_csv(
-        sessions_path=os.path.join(out_dir, "sessions.csv"),
-        accuracy_path=os.path.join(out_dir, "gaze_accuracy.csv")
+        sessions_path=os.path.join(out_dir, f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"),
+        accuracy_path=os.path.join(out_dir, f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv")
     )
     print("[metrics] collector CSV 저장 완료:", out_dir)
 
+
+# 테스트 결과 자동 시각화 (개발용)
+
+def show_session_popup(session_id):
+    try:
+        viz.setup_font()
+        df = viz.load_data("gaze_accuracy_results")
+        s = viz.get_session(df, session_id)
+
+        if len(s) == 0:
+            print(f"[popup] 세션을 찾을 수 없음: {session_id}")
+            return
+
+        print(viz.format_summary_line(viz.summarize_session(s)))
+
+        screen_w, screen_h = viz.infer_screen_size(df)
+        viz.plot_session_overview(s, screen_w, screen_h)
+        plt.show()
+
+    except Exception as e:
+        print(f"[popup] 시각화 실패: {e}")
 
 def main():
 
@@ -310,6 +438,11 @@ def main():
     is_korean = True
     is_shift = False
     use_pose_corrected = False
+    use_sqpnp_corrected = False
+
+    mouth_mode = False
+
+    last_session_id = None
 
     last_gaze_x = SCREEN_W // 2
     last_gaze_y = SCREEN_H // 2
@@ -325,6 +458,7 @@ def main():
         "Eye Keyboard 시작 | "
         "r: 재캘리브레이션 | "
         "t: 시선정확도테스트 | "
+        "m: 입벌림 입력 방식 변경 | "
         "q: 종료"
     )
 
@@ -371,11 +505,17 @@ def main():
             raw_sy = None
             corrected_sx = None
             corrected_sy = None
+            sqpnp_corrected_sx = None
+            sqpnp_corrected_sy = None
             sx = None
             sy = None
 
             corrected_iris_x = None
             corrected_iris_y = None
+            sqpnp_corrected_iris_x = None
+            sqpnp_corrected_iris_y = None
+            sqpnp_delta_x = None
+            sqpnp_delta_y = None
 
             iris_x = 0.0
             iris_y = 0.0
@@ -391,12 +531,19 @@ def main():
                 "face_center_x": 0.5,
                 "face_center_y": 0.5,
             }
+            sqpnp_headpose = dict(head_pose)
 
             if results.multi_face_landmarks:
 
                 lms = results.multi_face_landmarks[0]
 
                 head_pose = estimate_head_pose(
+                    lms,
+                    fw,
+                    fh
+                )
+
+                sqpnp_headpose = estimate_sqpnp_headpose(
                     lms,
                     fw,
                     fh
@@ -437,7 +584,7 @@ def main():
                    
                     continue
                 # ── 입벌림 캘리브레이션 ─────────────────────────
-                if not mouth_calibrator.done:
+                if mouth_mode and not mouth_calibrator.done:
                     mar = mouth_aspect_ratio(lms)
                     mouth_progress = mouth_calibrator.update(mar)
                     if mouth_calibrator.done:
@@ -497,7 +644,40 @@ def main():
                     corrected_iris_y
                 )
 
-                if use_pose_corrected:
+                sqpnp_corrected_iris_x, sqpnp_corrected_iris_y = calibrator.compensate_iris_by_head_pose(
+                    iris_x,
+                    iris_y,
+                    sqpnp_headpose
+                )
+
+                sqpnp_corrected_sx, sqpnp_corrected_sy = calibrator.map_to_screen(
+                    sqpnp_corrected_iris_x,
+                    sqpnp_corrected_iris_y
+                )
+
+                if (
+                    use_sqpnp_corrected
+                    and raw_sx is not None
+                    and raw_sy is not None
+                    and sqpnp_corrected_sx is not None
+                    and sqpnp_corrected_sy is not None
+                ):
+                    sqpnp_delta_x = np.clip(
+                        sqpnp_corrected_sx - raw_sx,
+                        -MAX_SQPNP_DELTA_PX,
+                        MAX_SQPNP_DELTA_PX
+                    )
+                    sqpnp_delta_y = np.clip(
+                        sqpnp_corrected_sy - raw_sy,
+                        -MAX_SQPNP_DELTA_PX,
+                        MAX_SQPNP_DELTA_PX
+                    )
+                    sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
+                    sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
+
+                if use_sqpnp_corrected:
+                    sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
+                elif use_pose_corrected:
                     sx, sy = corrected_sx, corrected_sy
                 else:
                     sx, sy = raw_sx, raw_sy
@@ -674,7 +854,10 @@ def main():
                 2
             )
 
-            mode_text = "Mode: PoseCorrected" if use_pose_corrected else "Mode: Raw"
+            if use_sqpnp_corrected:
+                mode_text = "Mode: SQPnP"
+            else:
+                mode_text = "Mode: PoseCorrected" if use_pose_corrected else "Mode: Raw"
 
             cv2.putText(
                 kbd_bg,
@@ -682,13 +865,35 @@ def main():
                 (30, SCREEN_H - 180),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
-                (0, 255, 0) if use_pose_corrected else (255, 255, 255),
+                (0, 255, 0) if (use_pose_corrected or use_sqpnp_corrected) else (255, 255, 255),
+                2
+            )
+
+            if sqpnp_delta_x is not None and sqpnp_delta_y is not None:
+                sqpnp_delta_text = f"d:({int(sqpnp_delta_x)},{int(sqpnp_delta_y)})"
+            else:
+                sqpnp_delta_text = "d:(None,None)"
+
+            sqpnp_mode_text = (
+                f"SQPnP: ON {sqpnp_delta_text}"
+                if use_sqpnp_corrected
+                else "SQPnP: OFF"
+            )
+
+            cv2.putText(
+                kbd_bg,
+                sqpnp_mode_text,
+                (30, SCREEN_H - 240),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0) if use_sqpnp_corrected else (255, 255, 255),
                 2
             )
 
             coord_text = (
                 f"Raw:({raw_sx},{raw_sy}) "
                 f"PoseCorrected:({corrected_sx},{corrected_sy}) "
+                f"SQPnP:({sqpnp_corrected_sx},{sqpnp_corrected_sy}) "
                 f"Active:({sx},{sy}) "
                 f"Gaze:({gaze_x},{gaze_y}) "
                 f"Iris:({iris_x:.4f},{iris_y:.4f})"
@@ -744,15 +949,36 @@ def main():
 
                 show_calibration_guide()
 
+            elif key == ord('h'):
+                use_sqpnp_corrected = not use_sqpnp_corrected
+                gaze.reset()
+                print("use_sqpnp_corrected:", use_sqpnp_corrected)
+
+            elif key == ord('m'):
+                mouth_mode = True
+                mouth_calibrator.reset()
+
+                print("입벌림 캘리브레이션 시작")
+
             elif key == ord('t'):
 
-                if calibrator.done:
+                 if calibrator.done:
 
                     gaze.reset()
+
+                    if use_sqpnp_corrected:
+                        version_name = "v0.1-sqpnp-corrected"
+                    elif use_pose_corrected:
+                        version_name = "v0.1-pose-corrected"
+                    else:
+                        version_name = "v0.1-raw"
+
                     collector = MetricsCollector(
-                        user_id="jeesoo",
-                        dev_version="v0.1-raw",
-                        px_per_cm=PX_PER_CM
+                        user_id="yejin",
+                        dev_version=version_name,
+                        px_per_cm=PX_PER_CM,
+                        calib_id=calibrator.calib_id,
+                        calib_reproj_rmse_px=calibrator.calib_reproj_rmse_px,
                     )
 
                     run_gaze_accuracy_test(
@@ -760,11 +986,19 @@ def main():
                         face_mesh,
                         calibrator,
                         gaze,
-                        collector
+                        collector,
+                        use_pose_corrected,
+                        use_sqpnp_corrected
                     )
+
+                    last_session_id = collector.session_id
 
     cap.release()
     cv2.destroyAllWindows()
+
+    # ── 종료 시 마지막 세션 결과 팝업 (측정한 적 있을 때만) ──
+    if last_session_id is not None:
+        show_session_popup(last_session_id)
 
 
 if __name__ == "__main__":

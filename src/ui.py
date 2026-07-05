@@ -571,7 +571,7 @@ def draw_status_bar(img, is_korean, fixation_count):
 
     draw.text(
         (20, SCREEN_H - 40),
-        "r : 재캘리브레이션   t : 시선정확도테스트   q : 종료",
+        "r : 재캘리브레이션   t : 시선정확도테스트   m : 입벌림 입력 방식 변경   q : 종료",
         font=small_font,
         fill=(150, 150, 150)
     )
@@ -694,38 +694,43 @@ def draw_mouth_calibration_screen(
     title = "입벌림 캘리브레이션"
 
     draw.text(
-        (SCREEN_W // 2 - 150, SCREEN_H // 2 - 220),
+        (SCREEN_W // 2, SCREEN_H // 2 - 220),
         title,
         font=font,
-        fill=(255, 255, 255)
+        fill=(255, 255, 255),
+        anchor="mm"
     )
 
     draw.text(
-        (SCREEN_W // 2 - 360, SCREEN_H // 2 - 150),
+        (SCREEN_W // 2, SCREEN_H // 2 - 150),
         instruction,
         font=font,
-        fill=(255, 255, 255)
+        fill=(255, 255, 255),
+        anchor="mm"
     )
 
     draw.text(
-        (SCREEN_W // 2 - 130, SCREEN_H // 2 - 60),
+        (SCREEN_W // 2, SCREEN_H // 2 - 60),
         f"MAR: {mar:.3f}",
         font=small_font,
-        fill=(255, 180, 80)
+        fill=(255, 180, 80),
+        anchor="mm"
     )
 
     draw.text(
-        (SCREEN_W // 2 - 130, SCREEN_H // 2 - 20),
+        (SCREEN_W // 2, SCREEN_H // 2 - 20),
         f"진행률: {progress:.2f}",
         font=small_font,
-        fill=(200, 200, 200)
+        fill=(200, 200, 200),
+        anchor="mm"
     )
 
     draw.text(
-        (SCREEN_W // 2 - 130, SCREEN_H // 2 + 20),
+        (SCREEN_W // 2, SCREEN_H // 2 + 20),
         f"남은 시간: {remaining:.1f}초",
         font=small_font,
-        fill=(0, 255, 255)
+        fill=(0, 255, 255),
+        anchor="mm"
     )
 
     draw.text(
