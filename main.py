@@ -66,6 +66,42 @@ from src.ui import (
 )
 
 from tests.test_runner import TestRunner
+
+def auto_brightness(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    mean = np.mean(gray)
+
+    target = 120
+
+    alpha = target / max(mean, 1)
+
+    alpha = np.clip(alpha, 0.8, 1.5)
+
+    frame = cv2.convertScaleAbs(
+        frame,
+        alpha=alpha,
+        beta=0
+    )
+
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+
+    l, a, b = cv2.split(lab)
+
+    clahe = cv2.createCLAHE(
+        clipLimit=2.0,
+        tileGridSize=(8, 8)
+    )
+
+    l = clahe.apply(l)
+
+    lab = cv2.merge((l, a, b))
+
+    return cv2.cvtColor(
+        lab,
+        cv2.COLOR_LAB2BGR
+    )
+
 from src.metrics.collector import MetricsCollector
 
 # 9점 테스트 (개발용)
@@ -117,6 +153,8 @@ def run_gaze_accuracy_test(
                 continue
 
             frame = cv2.flip(frame, 1)
+
+            frame = auto_brightness(frame)
 
             # ── 프레임 단위 기본값 (STB 신호용) ──
             face_detected = False
@@ -370,6 +408,12 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
+    # 자동 노출
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+
+    # 자동 화이트밸런스
+    cap.set(cv2.CAP_PROP_AUTO_WB, 1)
+
     cv2.namedWindow(
         "Eye Keyboard",
         cv2.WINDOW_NORMAL
@@ -417,8 +461,8 @@ def main():
     with mp_face_mesh.FaceMesh(
         max_num_faces=1,
         refine_landmarks=True,
-        min_detection_confidence=0.6,
-        min_tracking_confidence=0.6
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.7
     ) as face_mesh:
 
         if not show_countdown(cap, face_mesh):
@@ -436,6 +480,10 @@ def main():
                 break
 
             frame = cv2.flip(frame, 1)
+
+            # 자동 밝기 + CLAHE
+            frame = auto_brightness(frame)
+
             fh, fw = frame.shape[:2]
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
