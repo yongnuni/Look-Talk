@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline
+from src.tracking.blink import BlinkDetector, BlinkKind
 import viz
 import matplotlib.pyplot as plt
 
@@ -27,7 +28,6 @@ from src.tracking.eye_tracking import (
     LEFT_IRIS_RING,
     RIGHT_IRIS_RING,
     get_avg_iris,
-    is_blink,
     iris_confidence,
     draw_eye_contour,
     draw_iris_ring
@@ -43,7 +43,6 @@ from src.tracking.calibration import Calibrator
 from src.calibrations.mouth_calibration import MouthCalibration
 from src.tracking.gaze_pipeline import GazePipeline
 from src.tracking.dwell import DwellController
-from src.tracking.mouth import draw_mouth
 from src.tracking.head_pose import estimate_head_pose, estimate_sqpnp_headpose
 
 from src.keyboard import (
@@ -78,6 +77,7 @@ def run_gaze_accuracy_test(
     calibrator,
     gaze,
     collector,
+    blink_detector,
     use_pose_corrected,
     use_sqpnp_corrected=False
 ):
@@ -180,6 +180,7 @@ def run_gaze_accuracy_test(
                     iris_y
                 )
 
+                blink_detector.update(lms)
                 # 머리 자세 보정 좌표
                 corrected_iris_x, corrected_iris_y = (
                     calibrator.compensate_iris_by_head_pose(
@@ -234,7 +235,7 @@ def run_gaze_accuracy_test(
                 else:
                     sx, sy = raw_sx, raw_sy
 
-                blink = is_blink(lms)
+                blink = blink_detector.is_closed
                 conf = iris_confidence(lms)
 
                 gaze_x, gaze_y, _ = gaze.update(
@@ -434,6 +435,10 @@ def main():
     dwell = DwellController()
     mouth = MouthClickDetector()
     tester = TestRunner()
+    blink_detector = BlinkDetector(
+        detect_natural=True,
+        detect_intentional=True
+    )
 
     is_korean = True
     is_shift = False
@@ -500,6 +505,7 @@ def main():
             clicked_key = None
             dwell_ratio = 0.0
             mar = 0.0
+            blink_event = None
 
             raw_sx = None
             raw_sy = None
@@ -533,6 +539,21 @@ def main():
             }
             sqpnp_headpose = dict(head_pose)
 
+            # 얼굴 미검출 프레임에도 캘리브레이션 화면 유지 (깜빡임 방지)
+            if not calibrator.done and not results.multi_face_landmarks:
+
+                draw_calib_screen(calib_canvas, calibrator, elapsed_ratio)
+                cv2.imshow("Eye Keyboard", calib_canvas)
+
+                key = cv2.waitKey(1) & 0xFF
+
+                if key == ord('q'):
+                    break
+                elif key == ord('r'):
+                    calibrator.reset()
+
+                continue
+
             if results.multi_face_landmarks:
 
                 lms = results.multi_face_landmarks[0]
@@ -556,7 +577,8 @@ def main():
                 draw_mouth(frame,lms,fw,fh)
 
                 iris_x, iris_y = get_avg_iris(lms)
-                blink = is_blink(lms)
+                blink_event = blink_detector.update(lms)
+                blink = blink_detector.is_closed
                 conf = iris_confidence(lms)                
                 
 
@@ -987,6 +1009,7 @@ def main():
                         calibrator,
                         gaze,
                         collector,
+                        blink_detector,
                         use_pose_corrected,
                         use_sqpnp_corrected
                     )
