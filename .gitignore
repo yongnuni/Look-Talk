@@ -11,3 +11,5 @@ CLAUDE.md
 .calibration_results/
 .gaze_accuracy_results/
 .report/
+.env
+src/analysis/

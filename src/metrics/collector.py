@@ -20,10 +20,11 @@ from src.metrics.csv_export import append_rows
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.2"
+    SCHEMA_VERSION = "1.3"
 
     def __init__(self, user_id="anonymous", dev_version="v0.1-raw", px_per_cm=None,
-                 calib_id=None, calib_reproj_rmse_px=None):
+                 calib_id=None, calib_reproj_rmse_px=None,
+                 use_pose_corrected=False, use_sqpnp_corrected=False):
     # 세션 단위 메타데이터 (sessions.csv 한 행)
         self.session_id = str(uuid.uuid4())
         self.user_id = user_id
@@ -31,6 +32,14 @@ class MetricsCollector:
         self.px_per_cm = px_per_cm
         self.calib_id = calib_id
         self.calib_reproj_rmse_px = calib_reproj_rmse_px
+
+        if use_sqpnp_corrected:
+            self.correction_mode = "sqpnp_corrected"
+        elif use_pose_corrected:
+            self.correction_mode = "pose_corrected"
+        else:
+            self.correction_mode = "raw"
+
         self.start_timestamp = datetime.now(timezone.utc).isoformat()
         self.end_timestamp = None
 
@@ -198,7 +207,7 @@ class MetricsCollector:
             "session_id", "user_id", "dev_version",
             "start_timestamp", "end_timestamp",
             "session_duration_total_ms", "px_per_cm",
-            "calib_id", "calib_reproj_rmse_px", "schema_version",
+            "calib_id", "calib_reproj_rmse_px", "correction_mode", "schema_version",
         ]
         session_row = {
             "session_id": self.session_id,
@@ -214,6 +223,7 @@ class MetricsCollector:
                 if self.calib_reproj_rmse_px is not None
                 else None
             ),
+            "correction_mode": self.correction_mode,
             "schema_version": self.SCHEMA_VERSION,
         }
         self._append_rows(sessions_path, session_fields, [session_row])
