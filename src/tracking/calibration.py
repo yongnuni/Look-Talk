@@ -483,6 +483,123 @@ class Calibrator:
 
         return corrected_iris_x, corrected_iris_y
 
+    def diagnose_pose_correction(
+        self,
+        iris_x,
+        iris_y,
+        head_pose
+    ):
+        """
+        compensate_iris_by_head_pose()를 그대로 두고,
+        같은 게이트 조건을 읽기 전용으로 재계산해 진단용으로 반환합니다.
+
+        head movement 테스트(main.py의 run_head_movement_test())에서만 쓰입니다.
+        compensate_iris_by_head_pose()의 동작/시그니처는 이 메서드 추가로
+        전혀 바뀌지 않습니다(sqpnp_corrected 경로도 이 메서드는 호출하지 않습니다).
+
+        Returns:
+            {
+                "delta_center_x": float or None,
+                "delta_center_y": float or None,
+                "scale_ratio": float or None,
+                "would_apply": bool,
+                "fallback_reason": str,  # would_apply=True면 ""
+            }
+        """
+
+        if iris_x is None or iris_y is None:
+            return {
+                "delta_center_x": None,
+                "delta_center_y": None,
+                "scale_ratio": None,
+                "would_apply": False,
+                "fallback_reason": "invalid_iris",
+            }
+
+        if self.pose_baseline is None:
+            return {
+                "delta_center_x": None,
+                "delta_center_y": None,
+                "scale_ratio": None,
+                "would_apply": False,
+                "fallback_reason": "no_baseline",
+            }
+
+        if head_pose is None or not head_pose.get("valid", False):
+            return {
+                "delta_center_x": None,
+                "delta_center_y": None,
+                "scale_ratio": None,
+                "would_apply": False,
+                "fallback_reason": "invalid_pose",
+            }
+
+        if len(self.pose_baseline) < 7:
+            return {
+                "delta_center_x": None,
+                "delta_center_y": None,
+                "scale_ratio": None,
+                "would_apply": False,
+                "fallback_reason": "invalid_baseline",
+            }
+
+        base_scale = self.pose_baseline[3]
+        base_center_x = self.pose_baseline[5]
+        base_center_y = self.pose_baseline[6]
+
+        current_scale = head_pose.get("face_scale", base_scale)
+        current_center_x = head_pose.get("face_center_x", base_center_x)
+        current_center_y = head_pose.get("face_center_y", base_center_y)
+
+        if base_scale <= 0 or current_scale <= 0:
+            return {
+                "delta_center_x": None,
+                "delta_center_y": None,
+                "scale_ratio": None,
+                "would_apply": False,
+                "fallback_reason": "invalid_scale",
+            }
+
+        delta_center_x = current_center_x - base_center_x
+        delta_center_y = current_center_y - base_center_y
+
+        center_deadband_x = 0.005
+        center_deadband_y = 0.005
+
+        if abs(delta_center_x) < center_deadband_x:
+            delta_center_x = 0.0
+
+        if abs(delta_center_y) < center_deadband_y:
+            delta_center_y = 0.0
+
+        scale_ratio = current_scale / base_scale
+
+        if abs(delta_center_x) > 0.15 or abs(delta_center_y) > 0.15:
+            return {
+                "delta_center_x": delta_center_x,
+                "delta_center_y": delta_center_y,
+                "scale_ratio": scale_ratio,
+                "would_apply": False,
+                "fallback_reason": "delta_center_exceeded",
+            }
+
+        if scale_ratio < 0.7 or scale_ratio > 1.4:
+            return {
+                "delta_center_x": delta_center_x,
+                "delta_center_y": delta_center_y,
+                "scale_ratio": scale_ratio,
+                "would_apply": False,
+                "fallback_reason": "scale_ratio_out_of_range",
+            }
+
+        return {
+            "delta_center_x": delta_center_x,
+            "delta_center_y": delta_center_y,
+            "scale_ratio": scale_ratio,
+            "would_apply": True,
+            "fallback_reason": "",
+        }
+
     def apply_head_pose_correction(
         self,
         screen_x,
@@ -545,6 +662,86 @@ class Calibrator:
             screen_x,
             screen_y
         )
+
+    def map_to_screen_with_preclip(
+        self,
+        iris_x,
+        iris_y
+    ):
+        """
+        map_to_screen()과 동일한 호모그래피 계산을 별도로 수행하되,
+        clamp(화면 경계로 자르기) 전/후 좌표와 clamp 발생 여부, 매핑 유효성을
+        함께 반환하는 진단용 메서드입니다.
+
+        map_to_screen()은 이 메서드가 추가되어도 전혀 수정되지 않고,
+        이 메서드도 map_to_screen()을 호출하지 않습니다(완전히 독립적인 재계산).
+        SQPnP 경로를 포함한 기존 호출부는 원래의 map_to_screen()을 그대로 씁니다.
+
+        Returns:
+            {
+                "preclip_x": float or None,
+                "preclip_y": float or None,
+                "screen_x": int or None,
+                "screen_y": int or None,
+                "was_clamped": bool,
+                "mapping_valid": bool,
+            }
+        """
+
+        if self.H is None:
+            return {
+                "preclip_x": None,
+                "preclip_y": None,
+                "screen_x": None,
+                "screen_y": None,
+                "was_clamped": False,
+                "mapping_valid": False,
+            }
+
+        pt = np.array(
+            [[[iris_x, iris_y]]],
+            dtype=np.float32
+        )
+
+        result = cv2.perspectiveTransform(
+            pt,
+            self.H
+        )
+
+        preclip_x = float(result[0][0][0])
+        preclip_y = float(result[0][0][1])
+
+        screen_x = int(
+            np.clip(
+                preclip_x,
+                0,
+                SCREEN_W - 1
+            )
+        )
+
+        screen_y = int(
+            np.clip(
+                preclip_y,
+                0,
+                SCREEN_H - 1
+            )
+        )
+
+        was_clamped = (
+            preclip_x < 0
+            or preclip_x > SCREEN_W - 1
+            or preclip_y < 0
+            or preclip_y > SCREEN_H - 1
+        )
+
+        return {
+            "preclip_x": preclip_x,
+            "preclip_y": preclip_y,
+            "screen_x": screen_x,
+            "screen_y": screen_y,
+            "was_clamped": was_clamped,
+            "mapping_valid": True,
+        }
 
     def export_calibration_quality_csv(
         self,

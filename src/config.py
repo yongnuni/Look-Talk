@@ -73,3 +73,28 @@ CALIB_STD_Y = 0.008
 
 FIXATION_RADIUS = 40
 FIXATION_FRAMES = 6
+
+# ── head movement 테스트 설정 (3D/head pose 안정화 검증용) ──────
+
+HEAD_TEST_PHASE_SEC = 5.0
+
+HEAD_TEST_PHASES = [
+    ("center_baseline", "정면을 보고 화면 중앙 타깃을 응시하세요"),
+    ("move_left", "타깟을 계속 보면서 고개만 왼쪽으로 천천히 이동하세요"),
+    ("move_right", "타깟을 계속 보면서 고개만 오른쪽으로 천천히 이동하세요"),
+    ("move_near", "타깟을 계속 보면서 카메라 쪽으로 천천히 가까이 이동하세요"),
+    ("move_far", "타깟을 계속 보면서 카메라에서 천천히 멀어지세요"),
+    ("return_center", "다시 정면 정중앙으로 돌아오세요"),
+]
+
+# ── 9점 head movement 테스트 설정 (화면 전체 일반화 검증용) ──────
+# run_gaze_accuracy_test()의 9점(test_points)과 동일한 그리드를 재사용한다.
+# (기존 run_gaze_accuracy_test()의 인라인 리스트는 별개로 두고 손대지 않는다.)
+
+NINE_POINT_HEAD_TEST_TARGETS = [
+    (0.1, 0.1), (0.5, 0.1), (0.9, 0.1),
+    (0.1, 0.5), (0.5, 0.5), (0.9, 0.5),
+    (0.1, 0.9), (0.5, 0.9), (0.9, 0.9),
+]
+
+HEAD_TEST_MULTI_PHASE_SEC = 3.0

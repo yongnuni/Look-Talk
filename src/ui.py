@@ -571,7 +571,7 @@ def draw_status_bar(img, is_korean, fixation_count):
 
     draw.text(
         (20, SCREEN_H - 40),
-        "r : 재캘리브레이션   t : 시선정확도테스트   m : 입벌림 입력 방식 변경   q : 종료",
+        "r : 재캘리브레이션   t : 시선정확도테스트   g : head movement(1점)   9/x : head movement(9점)   m : 입벌림 입력 방식 변경   q : 종료",
         font=small_font,
         fill=(150, 150, 150)
     )
@@ -736,6 +736,306 @@ def draw_mouth_calibration_screen(
     draw.text(
         (20, SCREEN_H - 40),
         "r : 다시하기   q : 종료",
+        font=small_font,
+        fill=(150, 150, 150)
+    )
+
+    return np.array(img_pil)
+
+
+# ── head movement 테스트 화면 (3D/head pose 안정화 검증용) ──────
+
+def draw_head_movement_test_screen(
+    phase,
+    instruction,
+    phase_elapsed,
+    phase_duration,
+    target_x,
+    target_y,
+    raw_gaze=None,
+    pose_gaze=None
+):
+    canvas = np.zeros(
+        (SCREEN_H, SCREEN_W, 3),
+        dtype=np.uint8
+    )
+
+    progress = min(phase_elapsed / phase_duration, 1.0) if phase_duration > 0 else 0.0
+    remaining = max(0.0, phase_duration - phase_elapsed)
+
+    # 고정 타깃 + 진행률 링
+    cv2.circle(canvas, (target_x, target_y), 30, (50, 50, 50), -1)
+
+    cv2.ellipse(
+        canvas,
+        (target_x, target_y),
+        (30, 30),
+        -90,
+        0,
+        int(360 * progress),
+        (0, 220, 255),
+        4
+    )
+
+    cv2.circle(canvas, (target_x, target_y), 10, (0, 220, 255), -1)
+    cv2.circle(canvas, (target_x, target_y), 4, (15, 15, 15), -1)
+
+    # 참고용 raw/pose 커서 (있을 때만)
+    if raw_gaze is not None and raw_gaze[0] is not None and raw_gaze[1] is not None:
+        cv2.circle(canvas, (int(raw_gaze[0]), int(raw_gaze[1])), 8, (0, 140, 255), 2)
+
+    if pose_gaze is not None and pose_gaze[0] is not None and pose_gaze[1] is not None:
+        cv2.circle(canvas, (int(pose_gaze[0]), int(pose_gaze[1])), 8, (0, 255, 120), 2)
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (SCREEN_W // 2, 60),
+        "Head Movement Test",
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, 120),
+        instruction,
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H - 120),
+        f"단계: {phase}",
+        font=small_font,
+        fill=(200, 200, 200),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H - 90),
+        f"남은 시간: {remaining:.1f}초",
+        font=small_font,
+        fill=(0, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (20, SCREEN_H - 40),
+        "주황: raw   초록: pose_corrected   q / ESC : 중단",
+        font=small_font,
+        fill=(150, 150, 150)
+    )
+
+    return np.array(img_pil)
+
+
+# ── 9점 head movement 테스트 화면 (화면 전체 일반화 검증용) ──────
+
+def draw_head_movement_test_multi_screen(
+    all_targets_px,
+    current_target_index,
+    phase,
+    instruction,
+    phase_elapsed,
+    phase_duration,
+    raw_gaze=None,
+    pose_gaze=None
+):
+    canvas = np.zeros(
+        (SCREEN_H, SCREEN_W, 3),
+        dtype=np.uint8
+    )
+
+    progress = min(phase_elapsed / phase_duration, 1.0) if phase_duration > 0 else 0.0
+    remaining = max(0.0, phase_duration - phase_elapsed)
+
+    # 완료/대기 중인 타깃은 옅게 표시
+    for i, (px, py) in enumerate(all_targets_px):
+        if i == current_target_index:
+            continue
+        color = (70, 70, 70) if i > current_target_index else (60, 120, 60)
+        cv2.circle(canvas, (px, py), 14, color, -1)
+
+    # 현재 타깃 + 진행률 링
+    tx, ty = all_targets_px[current_target_index]
+
+    cv2.circle(canvas, (tx, ty), 30, (50, 50, 50), -1)
+
+    cv2.ellipse(
+        canvas,
+        (tx, ty),
+        (30, 30),
+        -90,
+        0,
+        int(360 * progress),
+        (0, 220, 255),
+        4
+    )
+
+    cv2.circle(canvas, (tx, ty), 10, (0, 220, 255), -1)
+    cv2.circle(canvas, (tx, ty), 4, (15, 15, 15), -1)
+
+    if raw_gaze is not None and raw_gaze[0] is not None and raw_gaze[1] is not None:
+        cv2.circle(canvas, (int(raw_gaze[0]), int(raw_gaze[1])), 8, (0, 140, 255), 2)
+
+    if pose_gaze is not None and pose_gaze[0] is not None and pose_gaze[1] is not None:
+        cv2.circle(canvas, (int(pose_gaze[0]), int(pose_gaze[1])), 8, (0, 255, 120), 2)
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (SCREEN_W // 2, 60),
+        "Head Movement Test (9-point)",
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, 120),
+        instruction,
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H - 150),
+        f"타깃 {current_target_index + 1}/{len(all_targets_px)}   단계: {phase}",
+        font=small_font,
+        fill=(200, 200, 200),
+        anchor="mm"
+    )
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H - 120),
+        f"남은 시간: {remaining:.1f}초",
+        font=small_font,
+        fill=(0, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (20, SCREEN_H - 40),
+        "주황: raw   초록: pose_corrected   q / ESC : 중단",
+        font=small_font,
+        fill=(150, 150, 150)
+    )
+
+    return np.array(img_pil)
+
+
+# ── 세션 적응형 keyboard ROI 보정 모델: mini calibration 화면 ────
+# (src/tracking/keyboard_session_model.py의 실험 모드 전용)
+
+CONDITION_LABELS = {
+    "center": "정면을 유지한 채",
+    "left": "고개를 살짝 왼쪽으로 돌린 채",
+    "right": "고개를 살짝 오른쪽으로 돌린 채",
+}
+
+STAGE_LABELS = {
+    "instruction": "이동하세요",
+    "warmup": "그대로 유지 (측정 준비)",
+    "hold": "그대로 유지 (측정 중)",
+}
+
+
+def draw_keyboard_session_calib_screen(
+    anchor_index,
+    n_anchors,
+    condition,
+    stage,
+    stage_elapsed,
+    stage_duration,
+    target_x,
+    target_y,
+    all_anchor_targets_px,
+    raw_gaze=None,
+):
+    canvas = np.zeros(
+        (SCREEN_H, SCREEN_W, 3),
+        dtype=np.uint8
+    )
+
+    progress = min(stage_elapsed / stage_duration, 1.0) if stage_duration > 0 else 0.0
+
+    # 다른 anchor 키들은 옅게 표시해 전체 진행 상황을 보여준다.
+    for i, (px, py) in enumerate(all_anchor_targets_px):
+        if i == anchor_index:
+            continue
+        cv2.circle(canvas, (px, py), 16, (60, 60, 60), -1)
+
+    # hold 구간(실제 수집 중)만 초록, 그 외(안내/워밍업)는 파란 링
+    ring_color = (0, 220, 120) if stage == "hold" else (0, 160, 220)
+
+    cv2.circle(canvas, (target_x, target_y), 30, (50, 50, 50), -1)
+
+    cv2.ellipse(
+        canvas,
+        (target_x, target_y),
+        (30, 30),
+        -90,
+        0,
+        int(360 * progress),
+        ring_color,
+        4
+    )
+
+    cv2.circle(canvas, (target_x, target_y), 10, ring_color, -1)
+    cv2.circle(canvas, (target_x, target_y), 4, (15, 15, 15), -1)
+
+    if raw_gaze is not None and raw_gaze[0] is not None and raw_gaze[1] is not None:
+        cv2.circle(canvas, (int(raw_gaze[0]), int(raw_gaze[1])), 8, (0, 140, 255), 2)
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (SCREEN_W // 2, 60),
+        "Keyboard Session Calibration",
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    condition_label = CONDITION_LABELS.get(condition, condition)
+
+    draw.text(
+        (SCREEN_W // 2, 120),
+        f"{condition_label} 이 키를 보세요",
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+
+    stage_label = STAGE_LABELS.get(stage, stage)
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H - 150),
+        f"anchor {anchor_index + 1}/{n_anchors}   조건: {condition}   {stage_label}",
+        font=small_font,
+        fill=(200, 200, 200),
+        anchor="mm"
+    )
+
+    stage_remaining = max(0.0, stage_duration - stage_elapsed)
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H - 120),
+        f"남은 시간: {stage_remaining:.1f}초",
+        font=small_font,
+        fill=(0, 255, 255),
+        anchor="mm"
+    )
+
+    draw.text(
+        (20, SCREEN_H - 40),
+        "초록 링: 측정 중   파란 링: 준비 중   q / ESC : 중단",
         font=small_font,
         fill=(150, 150, 150)
     )
