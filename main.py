@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline
-import viz
+import src.viz.viz as viz
 import matplotlib.pyplot as plt
 
 import src.hangul as hangul
@@ -1027,6 +1027,8 @@ def main():
                         px_per_cm=PX_PER_CM,
                         calib_id=calibrator.calib_id,
                         calib_reproj_rmse_px=calibrator.calib_reproj_rmse_px,
+                        use_pose_corrected=use_pose_corrected,
+                        use_sqpnp_corrected=use_sqpnp_corrected,
                     )
 
                     run_gaze_accuracy_test(
