@@ -1,21 +1,21 @@
 {
   "calibration_version": "v1",
-  "saved_at": "2026-06-12T16:40:52.440151",
+  "saved_at": "2026-07-05T22:19:35.869913",
   "mouth": {
-    "mar_baseline": 0.023786863653813918,
-    "activation_threshold": 0.10378686365381393,
+    "mar_baseline": 0.004695712497096718,
+    "activation_threshold": 0.08469571249709672,
     "mouth_success_rate": 1.0,
-    "activation_amplitude_mean": 1.1315965793269043,
-    "activation_duration_mean": 2.590582513809204,
-    "open_close_speed_mean": 0.4368116334047973,
-    "mouth_consistency": 0.804453334297712,
-    "mouth_contrast_ratio": 47.57233218282929,
-    "mouth_false_trigger_rate": 0.0,
-    "amplitude_decay": 0.19428525234438124,
-    "mouth_min_hold_duration": 1.295291256904602,
+    "activation_amplitude_mean": 1.1304759866113157,
+    "activation_duration_mean": 3.5945027351379393,
+    "open_close_speed_mean": 0.31450135663005235,
+    "mouth_consistency": 0.902777102225433,
+    "mouth_contrast_ratio": 240.746422893282,
+    "mouth_false_trigger_rate": 0.2,
+    "amplitude_decay": 0.0,
+    "mouth_min_hold_duration": 1.7972513675689696,
     "mouth_init_score": 1.0,
     "total_trials": 5,
     "success_count": 5,
-    "false_trigger_count": 0
+    "false_trigger_count": 1
   }
 }
