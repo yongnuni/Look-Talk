@@ -209,6 +209,10 @@ class Calibrator:
         self.warning = ""
         self.warning_start = None
 
+        # EMA용 이전 보정값
+        self.prev_corrected_iris_x = None
+        self.prev_corrected_iris_y = None
+
     def update(
         self,
         iris_x,
@@ -642,9 +646,15 @@ class Calibrator:
         if len(self.pose_baseline) < 7:
             return iris_x, iris_y
 
+        base_yaw = self.pose_baseline[0]
+        base_pitch = self.pose_baseline[1]
+
         base_scale = self.pose_baseline[3]
         base_center_x = self.pose_baseline[5]
         base_center_y = self.pose_baseline[6]
+
+        current_yaw = head_pose.get("yaw", base_yaw)
+        current_pitch = head_pose.get("pitch", base_pitch)
 
         current_scale = head_pose.get("face_scale", base_scale)
         current_center_x = head_pose.get("face_center_x", base_center_x)
@@ -652,6 +662,9 @@ class Calibrator:
 
         if base_scale <= 0 or current_scale <= 0:
             return iris_x, iris_y
+        
+        delta_yaw = current_yaw - base_yaw
+        delta_pitch = current_pitch - base_pitch
 
         # 얼굴 중심 이동량
         delta_center_x = current_center_x - base_center_x
@@ -659,8 +672,8 @@ class Calibrator:
 
         # 작은 얼굴 중심 흔들림은 보정하지 않음
         # MediaPipe landmark 노이즈가 커서에 섞이는 것을 방지합니다.
-        center_deadband_x = 0.005
-        center_deadband_y = 0.005
+        center_deadband_x = 0.015
+        center_deadband_y = 0.015
 
         if abs(delta_center_x) < center_deadband_x:
             delta_center_x = 0.0
@@ -673,10 +686,10 @@ class Calibrator:
 
         # 너무 큰 자세/거리 변화는 보정하지 않음
         # 이 경우는 보정보다 재캘리브레이션 대상에 가깝습니다.
-        if abs(delta_center_x) > 0.15:
+        if abs(delta_center_x) > 0.25:
             return iris_x, iris_y
 
-        if abs(delta_center_y) > 0.15:
+        if abs(delta_center_y) > 0.25:
             return iris_x, iris_y
 
         if scale_ratio < 0.7 or scale_ratio > 1.4:
@@ -684,16 +697,30 @@ class Calibrator:
 
         # 보정 강도
         # 처음에는 약하게 시작해야 합니다.
-        center_gain_x = 0.08
-        center_gain_y = 0.08
+        center_gain_x = 0.30
+        center_gain_y = 0.30
 
-        corrected_iris_x = iris_x - delta_center_x * center_gain_x
-        corrected_iris_y = iris_y - delta_center_y * center_gain_y
+        yaw_gain = 0.0025
+        pitch_gain = 0.0020
+
+        corrected_iris_x = (
+            iris_x
+            - delta_center_x * center_gain_x
+            - delta_yaw * yaw_gain
+            - (scale_ratio - 1.0) * 0.04
+        )
+
+        corrected_iris_y = (
+            iris_y
+            - delta_center_y * center_gain_y
+            - delta_pitch * pitch_gain
+            - (scale_ratio - 1.0) * 0.02
+        )
 
         # 얼굴 거리 변화 보정
         # 얼굴이 가까워져 face_scale이 커지면 iris 변화가 과장될 수 있으므로
         # 0.5 중심 기준으로 아주 약하게 정규화합니다.
-        scale_gain = 0.0
+        scale_gain = 0.35
 
         corrected_iris_x = 0.5 + (
             corrected_iris_x - 0.5
@@ -708,20 +735,37 @@ class Calibrator:
         )
 
         corrected_iris_x = float(
-            np.clip(
-                corrected_iris_x,
-                0.0,
-                1.0
-            )
+            np.clip(corrected_iris_x,0.0,1.0)
         )
 
         corrected_iris_y = float(
-            np.clip(
-                corrected_iris_y,
-                0.0,
-                1.0
-            )
+            np.clip(corrected_iris_y,0.0,1.0)
         )
+
+        # -----------------------------
+        # EMA
+        # -----------------------------
+        alpha = 0.35
+
+        if self.prev_corrected_iris_x is None:
+
+            self.prev_corrected_iris_x = corrected_iris_x
+            self.prev_corrected_iris_y = corrected_iris_y
+
+        else:
+
+            corrected_iris_x = (
+                alpha * corrected_iris_x +
+                (1-alpha) * self.prev_corrected_iris_x
+            )
+
+            corrected_iris_y = (
+                alpha * corrected_iris_y +
+                (1-alpha) * self.prev_corrected_iris_y
+            )
+
+            self.prev_corrected_iris_x = corrected_iris_x
+            self.prev_corrected_iris_y = corrected_iris_y
 
         return corrected_iris_x, corrected_iris_y
 
