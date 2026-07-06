@@ -534,6 +534,8 @@ def main():
     use_pose_corrected = False
     use_sqpnp_corrected = False
     use_ridge = False
+    show_all_markers = False   # b 키로 토글: 네 모드 좌표를 동시에 마커로 표시
+    mode_cycle_index = 0       # c 키: 0=raw, 1=pose, 2=sqpnp, 3=ridge 순환
 
     mouth_mode = False
 
@@ -1104,6 +1106,23 @@ def main():
                 2
             )
 
+            # ── 네 모드 좌표 동시 표시 (비교용, 클릭에는 영향 없음) ──
+            if show_all_markers:
+                # (좌표, 색, 라벨) — 색은 BGR
+                mode_markers = [
+                    (raw_sx, raw_sy, (255, 255, 255), "R"),              # raw: 흰색
+                    (corrected_sx, corrected_sy, (0, 255, 0), "P"),      # pose: 초록
+                    (sqpnp_corrected_sx, sqpnp_corrected_sy, (0, 165, 255), "S"),  # sqpnp: 주황
+                    (ridge_sx, ridge_sy, (255, 0, 255), "G"),            # ridge: 자홍
+                ]
+                for mx, my, color, label in mode_markers:
+                    if mx is not None and my is not None:
+                        cv2.circle(kbd_bg, (int(mx), int(my)), 12, color, 2)
+                        cv2.putText(
+                            kbd_bg, label, (int(mx) + 14, int(my) - 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
+                        )
+
             kbd_bg = draw_gaze_cursor(kbd_bg, gaze_x, gaze_y, fixation_count)
             kbd_bg = draw_status_bar(kbd_bg, is_korean, fixation_count)
 
@@ -1122,13 +1141,18 @@ def main():
                     break
             elif key == ord('p'):
                 use_pose_corrected = not use_pose_corrected
+                if use_pose_corrected:          # 켤 때만 나머지를 끔
+                    use_sqpnp_corrected = False
+                    use_ridge = False
                 gaze.reset()
                 print("use_pose_corrected:", use_pose_corrected)
-
                 show_calibration_guide()
 
             elif key == ord('h'):
                 use_sqpnp_corrected = not use_sqpnp_corrected
+                if use_sqpnp_corrected:          # 켤 때만 나머지를 끔
+                    use_pose_corrected = False
+                    use_ridge = False
                 gaze.reset()
                 print("use_sqpnp_corrected:", use_sqpnp_corrected)
 
@@ -1137,8 +1161,23 @@ def main():
                 if not calibrator.ridge.fitted:
                     print("[ridge] 아직 학습되지 않았습니다. 캘리브레이션(r)을 먼저 완료하세요.")
                 use_ridge = not use_ridge
+                if use_ridge:          # 켤 때만 나머지를 끔
+                    use_sqpnp_corrected = False
+                    use_pose_corrected = False
                 gaze.reset()
                 print("use_ridge:", use_ridge)
+            
+            elif key == ord('o'):
+                # raw 전용 키: 모든 보정 모드를 꺼서 순수 raw로 전환
+                use_pose_corrected = False
+                use_sqpnp_corrected = False
+                use_ridge = False
+                gaze.reset()
+                print("[mode] Raw로 전환")
+
+            elif key == ord('b'):
+                show_all_markers = not show_all_markers
+                print("show_all_markers:", show_all_markers)
 
             elif key == ord('m'):
                 mouth_mode = True
