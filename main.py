@@ -441,7 +441,7 @@ def show_session_popup(session_id):
 
         print(viz.format_summary_line(viz.summarize_session(s)))
 
-        screen_w, screen_h = viz.infer_screen_size(df)
+        screen_w, screen_h = viz.infer_screen_size(s)
         viz.plot_session_overview(s, screen_w, screen_h)
         plt.show()
 
