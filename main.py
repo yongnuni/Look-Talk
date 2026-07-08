@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline
+from src.tracking.blink import BlinkDetector, BlinkKind
 import src.viz.viz as viz
 import matplotlib.pyplot as plt
 
@@ -27,7 +28,6 @@ from src.tracking.eye_tracking import (
     LEFT_IRIS_RING,
     RIGHT_IRIS_RING,
     get_avg_iris,
-    is_blink,
     iris_confidence,
     draw_eye_contour,
     draw_iris_ring
@@ -43,8 +43,11 @@ from src.tracking.calibration import Calibrator
 from src.calibrations.mouth_calibration import MouthCalibration
 from src.tracking.gaze_pipeline import GazePipeline
 from src.tracking.dwell import DwellController
-from src.tracking.mouth import draw_mouth
 from src.tracking.head_pose import estimate_head_pose, estimate_sqpnp_headpose
+
+# ── 하이브리드(백본+릿지) 모듈 ──
+from src.tracking.gaze_backbone import GazeBackbone
+from src.tracking.feature_builder import build_features
 
 from src.keyboard import (
     create_buttons,
@@ -106,6 +109,10 @@ from src.metrics.collector import MetricsCollector
 
 MAX_SQPNP_DELTA_PX = 120
 
+# 백본 추론 주기 (프레임). CPU 부담을 줄이기 위해 N프레임마다 1회 추론하고
+# 그 사이에는 마지막 시선 벡터를 재사용합니다. 1이면 매 프레임 추론.
+BACKBONE_INFER_EVERY = 2
+
 # 9점 테스트 (개발용)
 
 def run_gaze_accuracy_test(
@@ -114,12 +121,17 @@ def run_gaze_accuracy_test(
     calibrator,
     gaze,
     collector,
+    blink_detector,
     use_pose_corrected,
-    use_sqpnp_corrected=False
+    use_sqpnp_corrected=False,
+    use_ridge=False,
+    backbone=None
 ):
     os.makedirs("gaze_accuracy_results", exist_ok=True)
 
-    if use_sqpnp_corrected:
+    if use_ridge:
+        mode_name = "ridge_hybrid"
+    elif use_sqpnp_corrected:
         mode_name = "sqpnp_corrected"
     elif use_pose_corrected:
         mode_name = "pose_corrected"
@@ -142,6 +154,9 @@ def run_gaze_accuracy_test(
     ]
 
     results = []
+
+    backbone_frame_count = 0
+    last_gaze_vec = None
 
     for idx, (rx, ry) in enumerate(test_points):
 
@@ -212,12 +227,27 @@ def run_gaze_accuracy_test(
                     fh
                 )
 
+                # ── 하이브리드: 시선 벡터 + 특징 벡터 ──
+                if backbone is not None and backbone.available:
+                    if backbone_frame_count % BACKBONE_INFER_EVERY == 0:
+                        last_gaze_vec = backbone.predict(frame, lms)
+                    backbone_frame_count += 1
+
+                features = build_features(
+                    iris_x,
+                    iris_y,
+                    head_pose,
+                    gaze_vec=last_gaze_vec,
+                    frame_width=fw
+                )
+
                 # Raw 좌표
                 raw_sx, raw_sy = calibrator.map_to_screen(
                     iris_x,
                     iris_y
                 )
 
+                blink_detector.update(lms)
                 # 머리 자세 보정 좌표
                 corrected_iris_x, corrected_iris_y = (
                     calibrator.compensate_iris_by_head_pose(
@@ -265,14 +295,24 @@ def run_gaze_accuracy_test(
                     sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
                     sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
 
-                if use_sqpnp_corrected:
+                # ── 릿지 하이브리드 좌표 ──
+                ridge_sx, ridge_sy = calibrator.map_to_screen_features(
+                    features
+                )
+
+                if use_ridge and ridge_sx is not None and ridge_sy is not None:
+                    sx, sy = ridge_sx, ridge_sy
+                elif use_ridge:
+                    # 릿지 실패 프레임은 raw로 폴백 (커서 유지 원칙)
+                    sx, sy = raw_sx, raw_sy
+                elif use_sqpnp_corrected:
                     sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
                 elif use_pose_corrected:
                     sx, sy = corrected_sx, corrected_sy
                 else:
                     sx, sy = raw_sx, raw_sy
 
-                blink = is_blink(lms)
+                blink = blink_detector.is_closed
                 conf = iris_confidence(lms)
 
                 gaze_x, gaze_y, _ = gaze.update(
@@ -410,6 +450,7 @@ def run_gaze_accuracy_test(
     )
 
     print("\n===== GAZE TEST =====")
+    print(f"Mode : {mode_name}")
     print(f"Average Error : {avg_error:.2f}px")
     print(f"Max Error : {max_error:.2f}px")
     print(f"Min Error : {min_error:.2f}px")
@@ -452,8 +493,8 @@ def main():
 
     cap = cv2.VideoCapture(0)
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
     # 자동 노출
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
@@ -478,11 +519,23 @@ def main():
     dwell = DwellController()
     mouth = MouthClickDetector()
     tester = TestRunner()
+    blink_detector = BlinkDetector(
+        detect_natural=True,
+        detect_intentional=True
+    )
+
+    # ── 하이브리드 백본 초기화 ──
+    # 모델 파일이 없거나 onnxruntime 미설치면 available=False로만 남고
+    # 기존 파이프라인은 그대로 동작합니다 (릿지는 기하 특징만으로 학습됨).
+    backbone = GazeBackbone()
 
     is_korean = True
     is_shift = False
     use_pose_corrected = False
     use_sqpnp_corrected = False
+    use_ridge = False
+    show_all_markers = False   # b 키로 토글: 네 모드 좌표를 동시에 마커로 표시
+    mode_cycle_index = 0       # c 키: 0=raw, 1=pose, 2=sqpnp, 3=ridge 순환
 
     mouth_mode = False
 
@@ -490,6 +543,10 @@ def main():
 
     last_gaze_x = SCREEN_W // 2
     last_gaze_y = SCREEN_H // 2
+
+    # 백본 추론 스로틀링 상태
+    backbone_frame_count = 0
+    last_gaze_vec = None
 
     buttonList = create_buttons(keys_kor_normal)
 
@@ -503,6 +560,7 @@ def main():
         "r: 재캘리브레이션 | "
         "t: 시선정확도테스트 | "
         "m: 입벌림 입력 방식 변경 | "
+        "g: 릿지 하이브리드 모드 토글 | "
         "q: 종료"
     )
 
@@ -548,6 +606,7 @@ def main():
             clicked_key = None
             dwell_ratio = 0.0
             mar = 0.0
+            blink_event = None
 
             raw_sx = None
             raw_sy = None
@@ -555,6 +614,8 @@ def main():
             corrected_sy = None
             sqpnp_corrected_sx = None
             sqpnp_corrected_sy = None
+            ridge_sx = None
+            ridge_sy = None
             sx = None
             sy = None
 
@@ -564,6 +625,8 @@ def main():
             sqpnp_corrected_iris_y = None
             sqpnp_delta_x = None
             sqpnp_delta_y = None
+
+            features = None
 
             iris_x = 0.0
             iris_y = 0.0
@@ -580,6 +643,21 @@ def main():
                 "face_center_y": 0.5,
             }
             sqpnp_headpose = dict(head_pose)
+
+            # 얼굴 미검출 프레임에도 캘리브레이션 화면 유지 (깜빡임 방지)
+            if not calibrator.done and not results.multi_face_landmarks:
+
+                draw_calib_screen(calib_canvas, calibrator, elapsed_ratio)
+                cv2.imshow("Eye Keyboard", calib_canvas)
+
+                key = cv2.waitKey(1) & 0xFF
+
+                if key == ord('q'):
+                    break
+                elif key == ord('r'):
+                    calibrator.reset()
+
+                continue
 
             if results.multi_face_landmarks:
 
@@ -604,9 +682,25 @@ def main():
                 draw_mouth(frame,lms,fw,fh)
 
                 iris_x, iris_y = get_avg_iris(lms)
-                blink = is_blink(lms)
+                blink_event = blink_detector.update(lms)
+                blink = blink_detector.is_closed
                 conf = iris_confidence(lms)                
                 
+                # ── 하이브리드: 시선 벡터 추론 (스로틀링) + 특징 벡터 ──
+                # 캘리브레이션 단계에서도 릿지 학습용 특징을 쌓아야 하므로
+                # calibrator.done 여부와 무관하게 여기서 계산합니다.
+                if backbone.available:
+                    if backbone_frame_count % BACKBONE_INFER_EVERY == 0:
+                        last_gaze_vec = backbone.predict(frame, lms)
+                    backbone_frame_count += 1
+
+                features = build_features(
+                    iris_x,
+                    iris_y,
+                    head_pose,
+                    gaze_vec=last_gaze_vec,
+                    frame_width=fw
+                )
 
                 # ── 캘리브레이션 ──────────────────────────────
 
@@ -617,7 +711,8 @@ def main():
                             iris_x,
                             iris_y,
                             conf,
-                            head_pose=head_pose
+                            head_pose=head_pose,
+                            features=features
                         )
 
                     draw_calib_screen(calib_canvas, calibrator, elapsed_ratio)
@@ -723,7 +818,19 @@ def main():
                     sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
                     sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
 
-                if use_sqpnp_corrected:
+                # 3.5. 릿지 하이브리드 좌표 (특징 벡터 → 화면 좌표)
+                ridge_sx, ridge_sy = calibrator.map_to_screen_features(
+                    features
+                )
+
+                # 모드 우선순위: ridge > sqpnp > pose > raw
+                # 릿지 모드인데 이번 프레임 릿지 좌표가 None이면
+                # (특징 결손, 릿지 미학습 등) raw로 폴백해 커서를 유지합니다.
+                if use_ridge and ridge_sx is not None and ridge_sy is not None:
+                    sx, sy = ridge_sx, ridge_sy
+                elif use_ridge:
+                    sx, sy = raw_sx, raw_sy
+                elif use_sqpnp_corrected:
                     sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
                 elif use_pose_corrected:
                     sx, sy = corrected_sx, corrected_sy
@@ -902,7 +1009,9 @@ def main():
                 2
             )
 
-            if use_sqpnp_corrected:
+            if use_ridge:
+                mode_text = "Mode: RidgeHybrid"
+            elif use_sqpnp_corrected:
                 mode_text = "Mode: SQPnP"
             else:
                 mode_text = "Mode: PoseCorrected" if use_pose_corrected else "Mode: Raw"
@@ -913,7 +1022,7 @@ def main():
                 (30, SCREEN_H - 180),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
-                (0, 255, 0) if (use_pose_corrected or use_sqpnp_corrected) else (255, 255, 255),
+                (0, 255, 0) if (use_pose_corrected or use_sqpnp_corrected or use_ridge) else (255, 255, 255),
                 2
             )
 
@@ -935,6 +1044,29 @@ def main():
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (0, 255, 0) if use_sqpnp_corrected else (255, 255, 255),
+                2
+            )
+
+            # ── 릿지/백본 상태 표시 ──
+            if last_gaze_vec is not None:
+                gaze_vec_text = f"GazeVec:({last_gaze_vec[0]:.1f},{last_gaze_vec[1]:.1f})"
+            else:
+                gaze_vec_text = "GazeVec:(None)"
+
+            ridge_status_text = (
+                f"Ridge: {'FIT' if calibrator.ridge.fitted else 'NOT_FIT'} "
+                f"Backbone: {'ON' if backbone.available else 'OFF'} "
+                f"{gaze_vec_text} "
+                f"RidgeXY:({ridge_sx},{ridge_sy})"
+            )
+
+            cv2.putText(
+                kbd_bg,
+                ridge_status_text,
+                (30, SCREEN_H - 270),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0) if use_ridge else (255, 255, 255),
                 2
             )
 
@@ -974,6 +1106,23 @@ def main():
                 2
             )
 
+            # ── 네 모드 좌표 동시 표시 (비교용, 클릭에는 영향 없음) ──
+            if show_all_markers:
+                # (좌표, 색, 라벨) — 색은 BGR
+                mode_markers = [
+                    (raw_sx, raw_sy, (255, 255, 255), "R"),              # raw: 흰색
+                    (corrected_sx, corrected_sy, (0, 255, 0), "P"),      # pose: 초록
+                    (sqpnp_corrected_sx, sqpnp_corrected_sy, (0, 165, 255), "S"),  # sqpnp: 주황
+                    (ridge_sx, ridge_sy, (255, 0, 255), "G"),            # ridge: 자홍
+                ]
+                for mx, my, color, label in mode_markers:
+                    if mx is not None and my is not None:
+                        cv2.circle(kbd_bg, (int(mx), int(my)), 12, color, 2)
+                        cv2.putText(
+                            kbd_bg, label, (int(mx) + 14, int(my) - 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
+                        )
+
             kbd_bg = draw_gaze_cursor(kbd_bg, gaze_x, gaze_y, fixation_count)
             kbd_bg = draw_status_bar(kbd_bg, is_korean, fixation_count)
 
@@ -992,15 +1141,43 @@ def main():
                     break
             elif key == ord('p'):
                 use_pose_corrected = not use_pose_corrected
+                if use_pose_corrected:          # 켤 때만 나머지를 끔
+                    use_sqpnp_corrected = False
+                    use_ridge = False
                 gaze.reset()
                 print("use_pose_corrected:", use_pose_corrected)
-
                 show_calibration_guide()
 
             elif key == ord('h'):
                 use_sqpnp_corrected = not use_sqpnp_corrected
+                if use_sqpnp_corrected:          # 켤 때만 나머지를 끔
+                    use_pose_corrected = False
+                    use_ridge = False
                 gaze.reset()
                 print("use_sqpnp_corrected:", use_sqpnp_corrected)
+
+            elif key == ord('g'):
+                # 릿지 하이브리드 모드 토글
+                if not calibrator.ridge.fitted:
+                    print("[ridge] 아직 학습되지 않았습니다. 캘리브레이션(r)을 먼저 완료하세요.")
+                use_ridge = not use_ridge
+                if use_ridge:          # 켤 때만 나머지를 끔
+                    use_sqpnp_corrected = False
+                    use_pose_corrected = False
+                gaze.reset()
+                print("use_ridge:", use_ridge)
+            
+            elif key == ord('o'):
+                # raw 전용 키: 모든 보정 모드를 꺼서 순수 raw로 전환
+                use_pose_corrected = False
+                use_sqpnp_corrected = False
+                use_ridge = False
+                gaze.reset()
+                print("[mode] Raw로 전환")
+
+            elif key == ord('b'):
+                show_all_markers = not show_all_markers
+                print("show_all_markers:", show_all_markers)
 
             elif key == ord('m'):
                 mouth_mode = True
@@ -1014,7 +1191,9 @@ def main():
 
                     gaze.reset()
 
-                    if use_sqpnp_corrected:
+                    if use_ridge:
+                        version_name = "v0.2-ridge-hybrid"
+                    elif use_sqpnp_corrected:
                         version_name = "v0.1-sqpnp-corrected"
                     elif use_pose_corrected:
                         version_name = "v0.1-pose-corrected"
@@ -1037,8 +1216,11 @@ def main():
                         calibrator,
                         gaze,
                         collector,
+                        blink_detector,
                         use_pose_corrected,
-                        use_sqpnp_corrected
+                        use_sqpnp_corrected,
+                        use_ridge=use_ridge,
+                        backbone=backbone
                     )
 
                     last_session_id = collector.session_id

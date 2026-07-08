@@ -86,3 +86,9 @@ tests/
 ├── test_runner.py                    # TestRunner: 문장 입력 테스트 진행 상태 관리 (키입력 수, 백스페이스, 반응시간, 완료 판정)
 └── test_sentences.py                 # 테스트용 문장 목록 (현재 2개: "안녕하세요", "감사합니다")
 ```
+=======
+<릿지>
+pip install scikit-learn
+
+<백본>
+pip install torch torchvision onnx onnxruntime huggingface_hub
