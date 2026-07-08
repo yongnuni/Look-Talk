@@ -21,7 +21,7 @@ root.destroy()
 # 수동 입력 필요한 값은 대각 인치 하나뿐.
 # 정식 웹캠 모니터 도착하면 그 값으로 교체. 분산 테스트 중엔 각자 자기 기기 값으로.
 
-MONITOR_DIAGONAL_INCH = 27.0   # ← 측정자가 자기 모니터 대각 크기(인치)로 수정
+MONITOR_DIAGONAL_INCH = 16.0   # ← 측정자가 자기 모니터 대각 크기(인치)로 수정
 
 # px_per_cm = 대각선 px / 대각선 cm
 _diag_px = (SCREEN_W ** 2 + SCREEN_H ** 2) ** 0.5
