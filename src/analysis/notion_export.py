@@ -1,135 +1,31 @@
 # -*- coding: utf-8 -*-
-"""진단 리포트를 Notion 데이터베이스에 자동 업로드하는 모듈.
-
-diagnostic.py의 diagnostic_battery()/build_session_summary_table()/
-collect_figures()와 같은 데이터를 사용해, HTML 리포트와 내용이 항상
-일치하는 Notion 페이지를 만든다. 별도 파일로 분리한 이유는
-diagnostic.py(계산+HTML)와 관심사가 다르고(Notion API 통신),
-src/analysis/에 앞으로 늘어날 개인 분석 도구들을 파일 단위로 나눠
-관리하기 위함이다.
-
-배치 위치: src/analysis/notion_export.py (프로젝트 루트 기준)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-구현 범위 — 텍스트·표·토글·색상·이미지(캘리브레이션/세션 오차 지도) 전부
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-이미지는 Notion 공식 문서(Direct Upload, single-part)에서 확인한 3단계
-흐름을 따른다:
-  1. POST /v1/file_uploads — 업로드 객체 생성 (filename, content_type)
-  2. POST /v1/file_uploads/{id}/send — 실제 바이너리 전송
-     (multipart/form-data, 나머지 Notion API는 전부 JSON이라 이
-     엔드포인트만 예외)
-  3. 블록(children)에 {"type": "file_upload", "file_upload": {"id": ...}}
-     형태로 참조 — 업로드 후 1시간 안에 attach해야 만료되지 않는다.
-외부 URL 호스팅은 필요 없다.
-
-⚠ NOTION_VERSION을 공식 문서에서 확인한 "2026-03-11"로 올렸다 (파일
-업로드 엔드포인트가 이 버전을 명시적으로 요구함). 기존에 검증됐던
-1단계 기능(표·토글·색상·데이터베이스 페이지 생성)이 이 새 버전에서도
-동일하게 동작하는지는 이 변경 이후 별도로 재확인이 필요하다 — Notion
-버전은 보통 하위 호환을 지향하지만, 이 문서만으로 100% 보장된 사실은
-아니므로 실제로 한 번 업로드해보고 이전 결과(recent5 등)와 비교할 것.
-
-이미지 업로드는 그림 1장당 API 호출이 2번(생성+전송) 추가로 발생한다.
-그림이 많으면(세션·캘리브레이션 수 증가) 실행 시간이 그만큼 늘어나고,
-Notion의 rate limit(429)에 걸릴 가능성도 있다 — 지금까지 발생한 적은
-없지만, 세션 수가 크게 늘어나면 유의할 것. 이미지 업로드 도중 실패하면
-페이지 생성(pages.create) 자체가 아직 호출되기 전이라 반쪽짜리 페이지가
-남지는 않는다. 이미 전송됐지만 미사용된 업로드는 1시간 뒤 자동
-archived 처리된다(Notion 정책).
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-색상 표현 방식
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-HTML 리포트의 background_gradient(연속적 RGB)와 달리, Notion 표 셀은
-고정 팔레트(...+_background 형태)만 지원한다. 값이 클수록 나쁜
-컬럼(mean_error_px, stuck_count, anomaly_count 등)을 대상으로,
-같은 표 안에서 값의 실제 크기(최솟값~최댓값을 균등 3분할, pd.cut)를
-기준으로 green/yellow/red_background를 매긴다. HTML의 axis=0(컬럼별
-정규화)과 같은 원칙 — 컬럼마다 스케일이 달라 전체 기준으로 섞어
-비교하지 않는다.
-
-부호 있는 편향값(dx_top/dy_top 등 row_compression 컬럼)은
-use_abs=True로 절댓값 기준 3분할을 쓴다 — "0에서 멀수록(부호 무관)
-나쁘다"는 의미를 반영하기 위함.
-
-⚠ 과거 버전(rank(method="first") + qcut 기반)에는 실사용 중 발견된
-버그가 있었다: ①동일 값이 원본 행 순서에 따라 서로 다른 색으로
-갈리는 문제, ②dy 컬럼에 higher_is_worse만 적용해 부호를 무시한
-탓에 가장 심각한 편향값이 초록색으로, 가장 양호한 값이 빨간색으로
-표시되는 문제. pd.cut(값 크기 기준) + use_abs 옵션으로 교체해
-해결했다.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-사전 준비 (최초 1회, 데이터베이스는 Notion에서 수동 생성)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. https://www.notion.so/my-integrations 에서 통합(integration) 생성,
-   발급된 토큰을 환경변수 NOTION_TOKEN으로 등록 (코드에 절대 하드코딩
-   하지 말 것 — 이 파일이나 .env가 git에 올라가지 않도록 .gitignore
-   확인).
-2. Notion에서 전체 페이지 데이터베이스를 직접 생성하고, 아래 속성을
-   이름·타입까지 정확히 일치하도록 추가한다 (다르면 업로드 시 400
-   에러):
-     Name           — 제목(Title)
-     Date           — 날짜(Date)
-     Group By       — 선택(Select), 옵션 calib_id / session_id 미리 생성
-     N Sessions     — 숫자(Number)
-     Correlation r  — 숫자(Number)
-     Mean Error Avg (px) — 숫자(Number)
-     Total Stuck    — 숫자(Number)
-     Total Anomaly  — 숫자(Number)
-3. 데이터베이스 우측 상단 "공유(Share)"에서 위 통합을 초대한다 —
-   빠뜨리면 database_id가 맞아도 404가 난다.
-4. 데이터베이스를 전체 페이지로 열고 주소창 URL에서 32자리
-   database_id를 확인한다 (워크스페이스명/ 뒤, ?v= 앞 부분).
-   환경변수 NOTION_DATABASE_ID로 등록해두면 코드에 값을 직접
-   적지 않아도 된다.
-   ※ create_diagnostic_database()는 API로 데이터베이스를 새로 만드는
-     함수라 이 방식(수동 생성)에서는 사용하지 않는다.
+"""진단 리포트를 Notion 데이터베이스에 자동 업로드하는 모듈
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 실행 매뉴얼
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-0. session_ids를 어떻게 정하는지(전체/특정/조건별/최근 N세션)는
-   diagnostic.py 상단 매뉴얼과 완전히 동일한 방식을 그대로 쓴다
-   (upload_diagnostic_to_notion()도 diagnostic_battery()와 같은
-   session_ids 인자를 받는 구조라서 별도로 다시 정리하지 않음).
-   여기서는 Notion 업로드에만 해당하는 절차만 적는다.
-
-1. 실제 실행은 src/analysis/run_export.py에서 한다. 이 파일(및
-   diagnostic.py)은 라이브러리 모듈이라 __main__에 실행 코드를 두지
-   않는다 — 실행 설정(어떤 세션, 어떤 label)이 바뀔 때마다 라이브러리
-   파일까지 같이 고칠 필요가 없도록 분리한 것. run_export.py 안의
-   "Notion 업로드" 부분 주석을 풀고 DATABASE_ID를 채운 뒤
+1. 실제 실행은 src/analysis/run_export.py에서 한다.
+   이 파일(및 diagnostic.py)은 라이브러리 모듈이라 __main__에 실행 코드를 두지 않음
+   run_export.py 안의 "Notion 업로드" 부분 주석을 풀고 DATABASE_ID를 채운 뒤
        python -m src.analysis.run_export
    로 실행한다.
 
-2. label 짓는 규칙: JSON/HTML 파일명과 동일한 label을 쓰는 습관을
-   들일 것 — 나중에 Notion 페이지와 로컬 산출물(diagnostics/ 폴더의
-   {label}_diagnostic_report.json, {label}_report.html)을 한눈에
-   대응시켜 찾기 위함.
+2. label 짓는 규칙: JSON/HTML 파일명과 동일한 label을 쓰는 습관을 들일 것
+   나중에 Notion 페이지와 로컬 산출물(diagnostics/ 폴더의
+   {label}_diagnostic_report.json, {label}_report.html)을 한눈에 대응시켜 찾기 위함.
 
-3. ⚠ 재실행 시 "덮어쓰기"가 아니라 "새 행 추가"다.
-   save_diagnostic_report()/build_diagnostic_html()은 label 기준
-   파일을 덮어쓰지만, 이 함수는 Notion pages.create를 호출하므로
-   같은 label로 두 번 실행하면 데이터베이스에 같은 이름의 행이
-   두 개 남는다 (자동 덮어쓰기·중복 제거 없음). 계산 로직을 고친
-   뒤 재업로드하는 경우, 이전 행을 Notion에서 직접 지우거나
-   보관(archive) 처리한 뒤 재실행할 것.
+3. ⚠ 재실행 시 "덮어쓰기"가 아니라 "새 행 추가"
+   save_diagnostic_report()/build_diagnostic_html()은 label 기준 파일을 덮어쓰지만,
+   이 함수는 Notion pages.create를 호출하므로 같은 label로 두 번 실행하면 데이터베이스에 같은 이름의 행이 두 개 남음
+   계산 로직을 고친 뒤 재업로드하는 경우, 이전 행을 Notion에서 직접 지우거나 보관(archive) 처리한 뒤 재실행할 것.
 
 4. 자주 만나는 에러:
-   - 400 Bad Request: properties의 키 이름·타입이 Notion 속성과
-     불일치. 에러 메시지에 어떤 속성이 문제인지 나오니 확인.
-   - 404 Not Found: database_id가 틀렸거나, 데이터베이스가 통합과
-     공유되지 않음 (사전 준비 3번 확인).
+   - 400 Bad Request: properties의 키 이름·타입이 Notion 속성과 불일치. 에러 메시지에 어떤 속성이 문제인지 나오니 확인.
+   - 404 Not Found: database_id가 틀렸거나, 데이터베이스가 통합과 공유되지 않음
    - 401 Unauthorized: NOTION_TOKEN 환경변수 미설정 또는 만료.
-   - 429 Too Many Requests: 이미지가 많아 짧은 시간에 API 호출이
-     몰린 경우. 재시도 로직은 아직 없음 — 발생하면 잠시 후 다시
-     실행할 것.
+   - 429 Too Many Requests: 이미지가 많아 짧은 시간에 API 호출이 몰린 경우. 재시도 로직은 아직 없음. 발생하면 잠시 후 다시 실행할 것.
 
-5. include_images=False로 호출하면 이미지 없이 텍스트·표만 업로드된다
-   (예전 1단계와 동일한 결과, 빠르게 확인만 하고 싶을 때 유용).
-   기본값은 True.
+5. include_images=False로 호출하면 이미지 없이 텍스트·표만 업로드됨 (기본값은 True)
 """
 
 import os
@@ -141,8 +37,6 @@ from src.viz import viz
 from src.viz import calib_viz
 
 NOTION_API_BASE = "https://api.notion.com/v1"
-# Notion 공식 문서(Create/Send a file upload)에서 확인한 값. 파일 업로드
-# 엔드포인트가 이 버전을 명시적으로 요구해서 모듈 전체에 통일했다.
 NOTION_VERSION = "2026-03-11"
 
 

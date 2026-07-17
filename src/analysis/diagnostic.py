@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 """세션/캘리브레이션 진단 배터리 + HTML 리포트 생성 도구
 
-팀 공용 시각화 파이프라인(src/viz/viz.py, src/viz/calib_viz.py)과는 별개의 개인 탐색 도구
-sessions.csv + gaze_accuracy.csv + calibration_quality.csv를 조인해
-상관관계, 좌표 압축 패턴, 화면 경계 고착, 축-선택적 이상치, STB 요약을 한 번에 계산하고,
-표+그림을 한 장의 자기완결형 HTML로 묶어준다.
-
 배치 위치: src/analysis/diagnostic.py (프로젝트 루트 기준)
 결과 저장 위치: src/analysis/diagnostics/ (.gitignore에 추가 필요)
 
@@ -247,18 +242,6 @@ def _prepare_scope(sessions, acc, session_ids):
 
 
 def build_session_summary_table(report, df, a, sid_to_calib):
-    """세션당 1행짜리 압축 요약표를 만든다.
-
-    build_diagnostic_html()과 Notion 업로드 함수(notion_export.py)가
-    이 함수를 공유한다 — 같은 집계 로직을 두 곳에 따로 구현하면 한쪽만
-    고치고 다른 쪽을 깜빡하는 사고가 나기 쉬워서 여기 한 곳으로 모았다.
-
-    Returns
-    -------
-    pd.DataFrame : columns = [session_id, calib_id, calib_rmse_px,
-        mean_error_px, correction_mode, dropout_rate, stuck_count, anomaly_count]
-        session_id/calib_id는 앞 8자리로 축약되어 있다.
-    """
     session_order = list(dict.fromkeys(df.sort_values("start_timestamp")["session_id"]))
 
     stuck_rows = report["stuck_at_boundary"]["flagged_rows"]
@@ -294,16 +277,6 @@ def build_session_summary_table(report, df, a, sid_to_calib):
 
 
 def collect_figures(df, a, calib_df, screen_w, screen_h):
-    """캘리브레이션/세션 오차 지도 그림들을 (category, label, fig) 튜플
-    리스트로 만든다. build_diagnostic_html()과 Notion 이미지 업로드
-    (notion_export.py)가 이 함수를 공유한다 — "어떤 캘리브레이션/세션을
-    그릴지" 결정 로직을 두 곳에 따로 구현하면, 한쪽에서 스코프 계산
-    방식을 고칠 때 다른 쪽을 깜빡할 위험이 있다.
-
-    category는 "calibration" 또는 "session". fig는 matplotlib Figure —
-    호출한 쪽이 base64 인코딩(HTML용)이든 PNG 바이너리 업로드
-    (Notion용)든 원하는 방식으로 소비하면 된다.
-    """
     session_order = list(dict.fromkeys(df.sort_values("start_timestamp")["session_id"]))
     calib_ids_in_scope = list(dict.fromkeys(df.sort_values("start_timestamp")["calib_id"]))
 
@@ -332,25 +305,6 @@ def collect_figures(df, a, calib_df, screen_w, screen_h):
 def build_diagnostic_html(sessions, acc, calib_df, session_ids, label,
                            group_by="calib_id", out_dir="src/analysis/diagnostics",
                            expand_details=False):
-    """진단 배터리 + 시각화(테스트 세션·캘리브레이션 모두)를 하나의
-    자기완결형 HTML로 묶는다.
-
-    report/ 폴더에 이미 저장된 PNG를 재사용하지 않고, 여기 넘긴 데이터로
-    viz.py/calib_viz.py 함수를 그 자리에서 새로 호출해 그린다 — 표와
-    그림이 서로 다른 세션 조합을 가리키는 상황을 원천 차단하기 위함.
-
-    최상단에 세션당 1행짜리 압축 요약표를 두고, 상세 표는 <details>로
-    접어 필요할 때만 펼쳐보게 한다 (한눈에 보기와 상세 확인을 분리).
-
-    Parameters
-    ----------
-    calib_df : pd.DataFrame
-        calibration_quality_v{CALIB_SCHEMA_VERSION}.csv 로드 결과.
-    expand_details : bool
-        True면 <details> 섹션을 전부 펼친 상태로 생성한다. PDF 인쇄나
-        Notion 아카이빙처럼 상호작용(클릭)이 불가능한 정적 매체로
-        내보낼 때 사용 — 접힌 채로 인쇄하면 상세 내역이 통째로 누락된다.
-    """
     viz.setup_font()  # matplotlib 한글 폰트 설정. 그림을 그리기 전에 반드시 먼저 호출.
 
     report = diagnostic_battery(sessions, acc, session_ids=session_ids, group_by=group_by)
@@ -460,14 +414,6 @@ _VERSION_RE = re.compile(r"_v([\d.]+)\.csv$")
 
 
 def _version_tuple(version_str, default=(0,)):
-    """"1.10" -> (1, 10) 같은 정수 튜플로 파싱해 버전을 비교한다.
-
-    문자열 그대로 비교("1.10" < "1.2")나 float 캐스팅(float("1.10")==1.1)은
-    두 자리 이상 마이너 버전에서 순서가 뒤집힐 수 있어 피한다. 파싱 불가(예:
-    정규식이 버전을 못 찾아 "unknown"이 된 경우)한 값은 default=(0,) 취급 —
-    (1,2)보다 작으므로 구버전 취급되어 0.0이 NaN으로 치환된다(값을 신뢰할 수
-    없으니 "측정 안 함"으로 보수적으로 처리).
-    """
     try:
         return tuple(int(p) for p in str(version_str).split("."))
     except (ValueError, AttributeError):
@@ -475,13 +421,6 @@ def _version_tuple(version_str, default=(0,)):
 
 
 def _concat_versioned_csv(prefix, results_dir):
-    """{prefix}_v*.csv 전부를 utf-8-sig로 읽어 concat, 버전은 파일명에서 추출.
-
-    CSV 내부 schema_version 컬럼은 버전마다 dtype이 미묘하게 달라 신뢰하지 않고
-    파일명을 진실源으로 삼는다. sorted(glob(...))는 알파벳순 정렬 — 현재 버전
-    표기(v1.0~v1.3)는 알파벳순=버전순이 우연히 일치하지만, 두 자리 마이너
-    버전(v1.10)이 생기면 깨지므로 그때 재검토 필요.
-    """
     paths = sorted(glob.glob(os.path.join(results_dir, f"{prefix}_v*.csv")))
     assert paths, f"{prefix}_v*.csv 파일을 '{results_dir}'에서 찾지 못했습니다."
     frames = []
@@ -494,28 +433,6 @@ def _concat_versioned_csv(prefix, results_dir):
 
 
 def load_all_sessions_history(results_dir="gaze_accuracy_results"):
-    """sessions_v*.csv / gaze_accuracy_v*.csv 전 버전을 합친다.
-
-    glob 패턴이 접두사(sessions_v / gaze_accuracy_v)라서 gaze_accuracy_raw_*,
-    gaze_accuracy_sqpnp_corrected_* 등 세션별 원본 파일은 자동 제외됨(실측 확인).
-    반환하는 session_id는 축약하지 않은 풀 UUID다 — 이후 join에 필요하므로
-    stage0_reanalysis.py에서 저장 직전에만 shorten_session_id()로 축약할 것.
-
-    중복 session_id 처리: paths는 파일명 알파벳순(=버전순) 정렬이라 같은
-    session_id가 여러 버전 파일에 있으면 나중에 로드된(=더 최신 버전) 행이
-    뒤에 온다. keep="last"로 최신 버전 쪽을 채택한다(구버전 스키마는 컬럼이
-    적어 정보 손실이 있으므로 최신 우선이 합리적).
-
-    구버전(source_schema_version < 1.2) iris_std 0.0 -> NaN 치환: 타깃별 iris
-    프레임 샘플 수집은 v1.2 무렵 추가된 기능이라, 그 이전 버전의
-    iris_std_x/y_px는 collector의 n<=1 방어값 관례로 인해 "측정 안 함"이
-    정확히 0.0으로 위장되어 있다(실측: v1.0/v1.1 15세션·135행 중 x축 134행,
-    y축 129행이 정확히 0.0 — 세션 전체가 아니라 행 단위로 섞여 있어 x/y
-    컬럼을 각각 독립적으로 판정해야 한다). 원본 CSV 파일은 변경하지 않고
-    이 함수의 반환값에서만 치환한다. 반대로 v1.2 이상인데 세션 전체(9행)가
-    양축 다 0.0인 경우(기능이 이미 켜져 있었어야 함)는 치환 대상이 아니며,
-    자동 치환 대신 session_id를 경고로만 출력해 별도 확인 대상으로 남긴다.
-    """
     sessions_hist = _concat_versioned_csv("sessions", results_dir)
     acc_hist = _concat_versioned_csv("gaze_accuracy", results_dir)
 
@@ -587,27 +504,6 @@ def compute_axis_gain(df_session):
 def check_comparability(px_per_cm, screen_w, screen_h,
                          ref_px_per_cm=43.364, ref_resolution=(1536, 864),
                          px_per_cm_tol=1e-3, resolution_tol_px=1):
-    """비교가능성 2축 독립 판정.
-
-    비교가능성은 서로 독립인 두 축이다 — 해상도가 같으면 px 단위 지표(오차_px,
-    게인 등)를 비교할 수 있고, px_per_cm이 같으면 cm 단위 지표(오차_cm 등)를
-    비교할 수 있다. 이 둘을 하나의 등급으로 뭉치면, 해상도는 기준과 일치하지만
-    px_per_cm만 다른 세션(실측: px_per_cm=25.697 그룹 4세션)이 통째로 배제되어
-    유효한 px 비교 데이터를 잃는다.
-
-    cmp_px  : 추정 해상도가 ref_resolution과 일치(±resolution_tol_px) → px 지표 비교 가능
-    cmp_cm  : px_per_cm이 ref_px_per_cm과 일치(±px_per_cm_tol) → cm 지표 비교 가능
-    reason  : False인 축에 대한 사유 문자열(둘 다 True면 "")
-
-    경고 — px_per_cm_tol을 0.5 이상으로 키우지 말 것: 42.829(2560x1440 그룹,
-    실측 20건)가 43.364(1536x864 그룹) 기준에 흡수되어 서로 다른 해상도의
-    세션이 같은 cm 비교군으로 잘못 묶인다. tol은 반드시 1e-3 수준으로 유지.
-
-    resolution_tol_px=1인 이유: 9점 좌표가 SCREEN*0.9 지점이라
-    viz.infer_screen_size()의 round(target_max/0.9) 역산이 실제보다 1px
-    작게 나오는 반올림 아티팩트가 있음(실측: 1536x864 세션 32건 전부 (1536,863)로
-    역산됨). tol=0이면 cmp_px가 하나도 True가 되지 않는다.
-    """
     if pd.isna(screen_w) or pd.isna(screen_h):
         cmp_px, px_reason = False, "해상도 역산 불가"
     else:
@@ -629,27 +525,6 @@ def check_comparability(px_per_cm, screen_w, screen_h,
 
 def build_session_inventory(sessions_hist, acc_hist, tol_px=5, clip_ratio_threshold=0.3,
                              ref_px_per_cm=43.364, ref_resolution=(1536, 864)):
-    """세션당 1행짜리 인벤토리 + 비교가능성 2축 + clip_suspect + 축별 게인.
-
-    calib_id/correction_mode/calib_reproj_rmse_px를 sessions 메타에서 그대로
-    끌어온다 — build_signal_vs_mapping_table()이 calib_reproj_rmse_px를
-    참조하고(누락 시 KeyError), correction_mode/calib_id는 이후 raw 세션 판별의
-    dev_version 교차 검증용으로 필요하다.
-
-    tol_px=5는 diagnostic_battery()의 stuck_at_boundary 판정과 동일 기본값
-    (동일 개념이므로 임계값도 통일).
-    clip_ratio_threshold=0.3: 유효 타깃 중 화면 경계(tol_px 이내) 근접 비율이
-    이 값 이상이면 clip_suspect=True (실측 60세션 분포 평균 0.139, 75%tile
-    0.222 기준 상위 ~15%를 분리하는 지점).
-
-    Returns
-    -------
-    pd.DataFrame, columns:
-        session_id(풀 UUID), source_schema_version, start_timestamp, dev_version,
-        calib_id, correction_mode, calib_reproj_rmse_px, px_per_cm, screen_w, screen_h,
-        n_targets, n_valid_pred, cmp_px, cmp_cm, comparability_reason,
-        clip_ratio, clip_suspect, gain_x, intercept_x, r2_x, gain_y, intercept_y, r2_y, gain_n
-    """
     rows = []
     for sid, g in acc_hist.groupby("session_id"):
         smeta_df = sessions_hist[sessions_hist["session_id"] == sid]
@@ -728,19 +603,6 @@ def _format_rank(series, ascending=True):
 
 
 def build_signal_vs_mapping_table(inventory_df, acc_hist):
-    """cmp_px==True 세션 대상 신호 vs 매핑 판별표.
-
-    이 표의 지표(mean_error_px, std류, calib_reproj_rmse_px)는 전부 px/무차원
-    스케일이라 px_per_cm(cm 축, cmp_cm) 일치 여부와는 무관하다 — 따라서
-    스코프는 cmp_px==True 전부(개수 고정 아님)로 한정한다. 자동 판정 로직은
-    넣지 않고 수치만 정렬 출력 + 컬럼별 세션간 순위 병기.
-
-    Parameters
-    ----------
-    inventory_df : pd.DataFrame
-        build_session_inventory() 반환값. **session_id가 풀 UUID인 상태에서
-        호출할 것** (축약 후 호출 시 acc_hist와 join 불가/충돌 위험).
-    """
     scope_sessions = inventory_df[inventory_df["cmp_px"] == True].copy()
     cols = ["session_id", "mean_error_px", "gaze_std_mag_median", "iris_std_mag_median",
             "dropout_rate_mean", "calib_reproj_rmse_px"]
@@ -776,19 +638,6 @@ def build_signal_vs_mapping_table(inventory_df, acc_hist):
 
 
 def build_top_error_targets(acc_hist, session_ids=None, top_n=5):
-    """오차 상위 top_n개 타깃 보조표.
-
-    session_ids로 세션 범위를 한정할 수 있다(기본은 전 세션). 드라이버에서는
-    cmp_px==True 세션으로 한정해서 호출한다 — 해상도가 다른 세션(예:
-    2560x1440)을 섞으면 px 오차가 절대적으로 커서 상위권을 해상도 효과로만
-    지배하게 되어 진짜 이상 세션을 가리게 되기 때문.
-
-    row_position은 target_index 0-2=상단/3-5=중단/6-8=하단으로 분류한다.
-    diagnostic_battery()의 row_compression과 동일한 target_index 3분할 기준을
-    재사용한 것 — target_index→행 위치 매핑이 모든 스키마 버전·모든 해상도에서
-    불변임을 실측 확인했고, screen_h는 세션마다 863~1440으로 달라 픽셀 기준
-    3분할을 쓰면 세션 간 행 정의가 흔들리기 때문에 픽셀 기준으로 재분할하지 않는다.
-    """
     scope = acc_hist if session_ids is None else acc_hist[acc_hist["session_id"].isin(session_ids)]
 
     valid = scope.dropna(subset=["pred_x_px", "pred_y_px"]).copy()  # 경계 사례: pred 결측 타깃 제외
@@ -825,13 +674,6 @@ CLIP_CAVEAT_NOTE = (
 
 
 def save_csv_with_caveat(df, path, note=CLIP_CAVEAT_NOTE):
-    """CSV 저장 시 상단에 '# ' 각주 줄을 붙인다.
-
-    pandas read_csv(comment='#')로 다시 읽으면 각주 줄은 자동 무시되어 데이터
-    파싱 호환성이 유지된다. utf-8-sig로 저장(Windows Excel에서 한글이 깨지지
-    않도록) — 기존 JSON/HTML은 utf-8이지만 CSV는 Excel 호환 목적이 다르므로
-    별도 선택.
-    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         for line in note.splitlines():
@@ -850,17 +692,6 @@ def save_csv_with_caveat(df, path, note=CLIP_CAVEAT_NOTE):
 # 없이 반복 측정만 했을 때의 드리프트/고착을 진단하는 데 특화되어 있다.
 
 def _json_safe(obj):
-    """중첩 dict/list를 재귀적으로 훑어 NaN -> None, numpy 스칼라 -> 파이썬
-    네이티브 타입으로 변환한다.
-
-    notion_export.py의 _safe_number()는 스칼라 1개(Notion number 속성 하나)를
-    다루는 함수라 재사용할 수 없다 — 여기서 필요한 건 dict 안의 dict, df를
-    to_dict("records")한 list[dict] 등 임의 깊이의 중첩 구조 전체를 한 번에
-    정리하는 것이라 문제 형태 자체가 다르다. 또한 upload_diagnostic_to_notion()
-    안에는 "diagnostic.py가 notion_export.py를 몰라도 되도록 의존 방향을 한쪽
-    으로만 유지한다"는 주석이 있어, 이 함수가 notion_export.py를 import하는 것도
-    피해야 한다 — 그래서 여기서 독립적으로 정의한다.
-    """
     if isinstance(obj, dict):
         return {k: _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, np.ndarray):
@@ -880,23 +711,6 @@ def _json_safe(obj):
 
 
 def build_block_structure(sessions_df, acc_df, session_ids):
-    """session_ids를 calib_id 단위 "블록"으로 묶고, 블록 내부에서 시간순
-    회차(test_idx, 1부터)를 매긴다.
-
-    block_id는 calib_id와 값이 동일하다 — 블록 실험이라는 개념을 표현하기
-    위해 컬럼명만 새로 붙였을 뿐, 새로운 id 체계를 만든 것은 아니다.
-
-    session_ids 지정 방법(전체/특정/조건별/최근 N세션/블록 실험)은
-    run_export.py 모듈 docstring의 "사용 매뉴얼" 절 참고.
-
-    Returns
-    -------
-    merged : pd.DataFrame
-        acc 원본 행(세션 수 x 9) + block_id, test_idx 컬럼.
-    block_summary : pd.DataFrame
-        columns = [block_id, n_sessions, calib_rmse_px, block_start_ts, block_end_ts]
-        block_start_ts 오름차순 정렬.
-    """
     df, a, sid_to_calib = _prepare_scope(sessions_df, acc_df, session_ids)
 
     # 9점 테스트 전용 가드. diagnostic_battery()의 assert와 개념은 같지만
@@ -945,16 +759,6 @@ def build_block_structure(sessions_df, acc_df, session_ids):
 
 def _detect_frozen_session(valid, gaze_std_median_x, gaze_std_median_y,
                             coord_round=0, unique_thresh=2, std_eps=1e-6):
-    """세션이 "고착"됐는지 판정: 유효 예측 좌표(정수 px 반올림) 고유값이
-    unique_thresh개 이하이고, gaze_std_x/y_px의 세션 내 median이 둘 다
-    std_eps 미만이면 고착으로 본다(단순히 좌표가 겹치는 것만으로는 우연의
-    일치일 수 있어, 입력 신호 자체가 거의 흔들리지 않았다는 조건을 함께 요구).
-
-    Returns
-    -------
-    (frozen: bool, frozen_coord: str or None) — frozen_coord는 가장 많이
-    나온 좌표를 "(x, y)" 문자열로 표기(고착이 아니면 None).
-    """
     if valid.empty:
         return False, None
     coords = list(zip(valid["pred_x_px"].round(coord_round),
@@ -973,30 +777,6 @@ def _detect_frozen_session(valid, gaze_std_median_x, gaze_std_median_y,
 
 
 def compute_block_session_stats(merged_df):
-    """(block_id, test_idx, session_id)당 1행 — 블록×회차 통계표.
-
-    compute_axis_gain()을 그대로 재사용한다(재구현 아님).
-
-    clip_n은 build_session_inventory()와 동일한 경계 허용오차 공식
-    (screen_w/h - 1 - tol_px, infer_screen_size의 반올림 아티팩트 보정 포함)을
-    따르며, 유효 예측(pred 결측 아님)만 대상으로 한다 — 화면 경계 클리핑과
-    추적 실패(결측)는 서로 다른 실패 모드라 n_missing_pred로 별도 집계한다.
-
-    gaze_std/iris_std는 x/y 축별 median과, build_signal_vs_mapping_table()/
-    build_top_error_targets()가 이미 쓰는 sqrt(x^2+y^2) 합성 magnitude의
-    median을 함께 낸다(신규 관례가 아니라 기존 관례 재사용).
-
-    Returns
-    -------
-    pd.DataFrame, columns:
-        block_id, test_idx, session_id, n_valid, n_missing_pred,
-        mean_error_px, gain_x, intercept_x, r2_x, gain_y, intercept_y, r2_y, gain_n,
-        clip_n, clip_ratio,
-        gaze_std_median_x_px, gaze_std_median_y_px,
-        iris_std_median_x_px, iris_std_median_y_px,
-        gaze_std_mag_median, iris_std_mag_median,
-        frozen, frozen_coord
-    """
     tol_px = 5  # build_session_inventory()/diagnostic_battery()와 동일 값 재사용
 
     rows = []
@@ -1045,43 +825,6 @@ def compute_block_session_stats(merged_df):
 
 
 def decompose_variance(block_stats, exclude_blocks=None):
-    """mean_error_px를 block_id로 묶어 between/within 제곱합(SS)으로 분해한다
-    (일원배치 ANOVA 분해, 블록 크기(4 vs 5)를 실제 n_i로 가중).
-
-    ratio = SS_between / SS_total (= SS_between / (SS_between + SS_within),
-    eta-squared와 동일한 정의, method="eta_squared") — 값이 클수록 "전체
-    분산 중 블록(캘리브레이션) 간 차이로 설명되는 비율이 크다"는 뜻.
-    MS_between/(MS_between+MS_within)(자유도로 나눈 뒤 비교하는 버전)도
-    함께 계산해 참고용으로 남기지만, 이는 블록 크기가 다르면(4 vs 5) df
-    보정이 각 SS를 서로 다른 비율로 깎아 원래의 "설명된 분산 비율"이라는
-    의미를 왜곡한다(실측 확인: 2026-07-08 데이터에서 MS 기준 0.91 vs
-    SS/SS_total 기준 0.69로 크게 갈림) — 그래서 주 지표(ratio)는
-    SS/SS_total 쪽을 쓴다.
-
-    icc1은 불균형 보정 ICC(1)(모집단 급내상관 추정치)을 추가로 계산해
-    참고값으로 병기한다:
-        n0 = (N - Σ(n_b²)/N) / (k-1)   # 불균형 보정 평균 그룹 크기
-        icc1 = (MS_b - MS_w) / (MS_b + (n0-1) * MS_w)
-    ratio(η²)는 표본 기술통계, icc1은 모집단 급내상관 추정치 — 통상
-    icc1 <= η². k<2이거나 MS_w를 계산할 수 없으면(df_within<=0) None.
-    통계적 유의성 검정이 아니다(p-value 없음).
-
-    Parameters
-    ----------
-    exclude_blocks : list[str] or None
-        None(기본값): frozen=True인 세션이 하나라도 있는 block을 자동 제외한다
-        (고착 세션의 mean_error_px는 "고착 좌표-타깃 거리"일 뿐 추적 성능을
-        반영하지 않아 블록 평균을 오염시키므로). 자동 제외를 끄고 싶으면 빈
-        리스트 []를 명시적으로 넘길 것 — None과 []는 의미가 다르다.
-
-    Returns
-    -------
-    dict : grand_mean, n_blocks_used, n_sessions_used, ss_between, ss_within,
-        ss_total, df_between, df_within, ms_between, ms_within,
-        ratio(=SS_between/SS_total), method("eta_squared"), icc1(불균형 보정
-        ICC(1), 계산 불능 시 None), per_block(list[dict]: block_id, n, mean, sd),
-        blocks_used, blocks_excluded, sessions_excluded.
-    """
     if exclude_blocks is None:
         auto_excluded = sorted(block_stats.loc[block_stats["frozen"], "block_id"].unique().tolist())
     else:
@@ -1139,19 +882,6 @@ def decompose_variance(block_stats, exclude_blocks=None):
 
 
 def detect_block_trend(block_stats):
-    """블록별 test_idx-mean_error_px 스피어만 상관 "추세 지표".
-
-    통계적 유의성 검정이 아니다(p-value 없음, "유의함" 주장 없음) — 블록당
-    표본이 4~5개뿐이라 유의성 검정 자체가 무의미해 의도적으로 배제했다.
-    pandas 내장 Series.corr(method="spearman")만 쓴다(scipy 의존성 불필요).
-
-    Returns
-    -------
-    pd.DataFrame, columns:
-        block_id, n_trials, spearman_r(n_trials<=3이면 NaN, 계산 안 함),
-        monotonic({"increasing","decreasing","flat","none"}),
-        mean_error_first, mean_error_last, delta_first_last
-    """
     rows = []
     for block_id, g in block_stats.groupby("block_id"):
         g = g.dropna(subset=["mean_error_px"]).sort_values("test_idx")
@@ -1178,19 +908,6 @@ def detect_block_trend(block_stats):
 
 
 def build_block_experiment_report(sessions_df, acc_df, session_ids, exclude_blocks=None):
-    """블록 실험(캘리브레이션 1회 + raw 9점 테스트 N회 = 1블록) 분석을 한 번에
-    계산해 JSON-직렬화 가능한 dict로 반환한다.
-
-    build_block_structure/compute_block_session_stats/decompose_variance/
-    detect_block_trend를 순서대로 호출해 묶는 통합 함수 — save_diagnostic_report()로
-    저장하거나 notion_export.upload_diagnostic_to_notion()의 block_report
-    인자로 그대로 넘길 수 있다.
-
-    Returns
-    -------
-    dict with keys: n_sessions, n_blocks, block_summary(list[dict]),
-        block_session_stats(list[dict]), variance_decomposition(dict), trend(list[dict])
-    """
     merged, block_summary = build_block_structure(sessions_df, acc_df, session_ids)
     block_stats = compute_block_session_stats(merged)
     variance = decompose_variance(block_stats, exclude_blocks=exclude_blocks)
@@ -1210,19 +927,12 @@ def build_block_experiment_report(sessions_df, acc_df, session_ids, exclude_bloc
 # ══════════════════════════════════════════════════════════════
 # 5. 실행 방법
 # ══════════════════════════════════════════════════════════════
-# 이 파일은 라이브러리 모듈이다 (diagnostic_battery, save_diagnostic_report,
-# build_diagnostic_html, load_all_sessions_history 등을 정의만 함). 실제 실행은
-# 이 파일에 두지 않고 두 개의 드라이버로 분리했다 — 라이브러리 코드와 매번
-# 값이 바뀌는 실행 설정을 한 파일에 섞으면, 드라이버와 여기 두 곳에 같은
-# 예시 코드가 중복되어 한쪽만 고치고 잊어버리는 사고가 나기 쉽다.
+# 이 파일은 라이브러리 모듈
+# (diagnostic_battery, save_diagnostic_report,
+# build_diagnostic_html, load_all_sessions_history 등을 정의만 함)
 #
 # - 최신 스키마 단일 버전 + 시각화 + Notion 업로드: python -m src.analysis.run_export
 # - 스키마 이력 전체 재분석(Phase 2): python -m src.analysis.stage0_reanalysis
-#
-# session_ids를 정하는 방법(전체/특정/조건별/최근 N세션)은 run_export.py
-# 모듈 docstring의 "사용 매뉴얼" 절 참고. (참고: 이 파일은 src.viz.viz,
-# src.tracking.calibration 등 로컬 프로젝트 모듈을 import하므로 Colab
-# 등 프로젝트 폴더 밖 환경에서는 그대로 실행할 수 없다.)
 
 if __name__ == "__main__":
     print("이 파일은 라이브러리 모듈입니다. 실행은 'python -m src.analysis.run_export' 또는 "
