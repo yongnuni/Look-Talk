@@ -21,6 +21,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+from src.metrics.collector import MetricsCollector
+
 
 # ── 폰트 설정 (OS별 한글 폰트) ─────────────────────────────
 
@@ -53,18 +55,28 @@ def setup_font():
 
 # ── 데이터 로딩 / 정리 ─────────────────────────────────────
 
+def accuracy_filename():
+    """현재 코드의 SCHEMA_VERSION에 대응하는 gaze_accuracy CSV 파일명."""
+    return f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv"
+
+
+def sessions_filename():
+    """현재 코드의 SCHEMA_VERSION에 대응하는 sessions CSV 파일명."""
+    return f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
+
+
 def load_data(results_dir):
-    """gaze_accuracy.csv + sessions.csv를 읽어 병합한 DataFrame을 반환.
+    """gaze_accuracy_vN.N.csv + sessions_vN.N.csv를 읽어 병합한 DataFrame을 반환.
 
     타깃 단위 지표(gaze_accuracy)에 세션 메타(sessions)를 session_id로 붙인다.
     start_timestamp 기준으로 정렬해 항상 측정 시간순을 보장한다.
     """
-    acc_path = os.path.join(results_dir, "gaze_accuracy.csv")
-    sess_path = os.path.join(results_dir, "sessions.csv")
+    acc_path = os.path.join(results_dir, accuracy_filename())
+    sess_path = os.path.join(results_dir, sessions_filename())
 
     acc = pd.read_csv(acc_path, encoding="utf-8-sig")
 
-    # sessions.csv가 있으면 메타(버전·시각)를 붙인다. 없어도 동작.
+    # sessions 파일이 있으면 메타(버전·시각)를 붙인다. 없어도 동작.
     if os.path.isfile(sess_path):
         sess = pd.read_csv(sess_path, encoding="utf-8-sig")
         keep = [c for c in ["session_id", "dev_version", "start_timestamp",

@@ -10,24 +10,36 @@
 두 파일은 session_id로 연결된다.
 """
 
-import os
-import csv
 import math
 import uuid
 import statistics
 from datetime import datetime, timezone
 
+from src.metrics.csv_export import append_rows
+
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.1"
+    SCHEMA_VERSION = "1.3"
 
-    def __init__(self, user_id="anonymous", dev_version="v0.1-raw", px_per_cm=None):
+    def __init__(self, user_id="anonymous", dev_version="v0.1-raw", px_per_cm=None,
+                 calib_id=None, calib_reproj_rmse_px=None,
+                 use_pose_corrected=False, use_sqpnp_corrected=False):
     # 세션 단위 메타데이터 (sessions.csv 한 행)
         self.session_id = str(uuid.uuid4())
         self.user_id = user_id
         self.dev_version = dev_version
         self.px_per_cm = px_per_cm
+        self.calib_id = calib_id
+        self.calib_reproj_rmse_px = calib_reproj_rmse_px
+
+        if use_sqpnp_corrected:
+            self.correction_mode = "sqpnp_corrected"
+        elif use_pose_corrected:
+            self.correction_mode = "pose_corrected"
+        else:
+            self.correction_mode = "raw"
+
         self.start_timestamp = datetime.now(timezone.utc).isoformat()
         self.end_timestamp = None
 
@@ -182,15 +194,20 @@ class MetricsCollector:
     def end_session(self):
         self.end_timestamp = datetime.now(timezone.utc).isoformat()
 
-    def export_csv(self, sessions_path="sessions.csv",
-                   accuracy_path="gaze_accuracy.csv"):
+    def export_csv(self, sessions_path=None, accuracy_path=None):
+        if sessions_path is None:
+            sessions_path = f"sessions_v{self.SCHEMA_VERSION}.csv"
+        if accuracy_path is None:
+            accuracy_path = f"gaze_accuracy_v{self.SCHEMA_VERSION}.csv"
+
         if self.end_timestamp is None:
             self.end_session()
 
         session_fields = [
             "session_id", "user_id", "dev_version",
             "start_timestamp", "end_timestamp",
-            "session_duration_total_ms", "px_per_cm", "schema_version",
+            "session_duration_total_ms", "px_per_cm",
+            "calib_id", "calib_reproj_rmse_px", "correction_mode", "schema_version",
         ]
         session_row = {
             "session_id": self.session_id,
@@ -200,6 +217,13 @@ class MetricsCollector:
             "end_timestamp": self.end_timestamp,
             "session_duration_total_ms": self._compute_duration_ms(),
             "px_per_cm": round(self.px_per_cm, 3) if self.px_per_cm else None,
+            "calib_id": self.calib_id,
+            "calib_reproj_rmse_px": (
+                round(self.calib_reproj_rmse_px, 2)
+                if self.calib_reproj_rmse_px is not None
+                else None
+            ),
+            "correction_mode": self.correction_mode,
             "schema_version": self.SCHEMA_VERSION,
         }
         self._append_rows(sessions_path, session_fields, [session_row])
@@ -247,10 +271,4 @@ class MetricsCollector:
         return round(statistics.mean(fps_values), 2)
 
     def _append_rows(self, path, fieldnames, rows):
-        file_exists = os.path.isfile(path)
-        with open(path, "a", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
+        append_rows(path, fieldnames, rows)

@@ -21,3 +21,9 @@ python -m pip install numpy==1.26.4
 python -m pip install pillow
 
 python -m pip install jamo
+
+<릿지>
+pip install scikit-learn
+
+<백본>
+pip install torch torchvision onnx onnxruntime huggingface_hub

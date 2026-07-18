@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+from src.tracking.blink import eye_aspect_ratio, average_ear
 
 
 # ── MediaPipe 초기화 ──────────────────────────────────────────
@@ -98,88 +99,13 @@ def get_avg_iris(landmarks):
     )
 
 
-# ── EAR 계산 ────────────────────────────────────────────────
-
-def eye_aspect_ratio(
-    landmarks,
-    outer_idx,
-    inner_idx,
-    top_idx,
-    bottom_idx
-):
-
-    lm = landmarks.landmark
-
-    eye_width = abs(
-        lm[outer_idx].x -
-        lm[inner_idx].x
-    )
-
-    eye_height = abs(
-        lm[top_idx].y -
-        lm[bottom_idx].y
-    )
-
-    if eye_width <= 0.001:
-        return 0.0
-
-    return eye_height / eye_width
-
-
-# ── 눈 깜빡임 검출 ───────────────────────────────────────────
-
-def is_blink(landmarks):
-
-    left_ear = eye_aspect_ratio(
-        landmarks,
-        33,
-        133,
-        159,
-        145
-    )
-
-    right_ear = eye_aspect_ratio(
-        landmarks,
-        263,
-        362,
-        386,
-        374
-    )
-
-    avg_ear = (
-        left_ear +
-        right_ear
-    ) / 2
-
-    return avg_ear < 0.18
-
-
 # ── 홍채 추적 신뢰도 계산 ────────────────────────────────────
 
-def iris_confidence(landmarks):
+def iris_confidence(landmarks, closed_threshold=0.18):
 
-    left_ear = eye_aspect_ratio(
-        landmarks,
-        33,
-        133,
-        159,
-        145
-    )
+    avg_ear = average_ear(landmarks)
 
-    right_ear = eye_aspect_ratio(
-        landmarks,
-        263,
-        362,
-        386,
-        374
-    )
-
-    avg_ear = (
-        left_ear +
-        right_ear
-    ) / 2
-
-    if avg_ear < 0.18:
+    if avg_ear < closed_threshold:
         return 0.0
 
     lm = landmarks.landmark

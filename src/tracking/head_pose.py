@@ -228,3 +228,130 @@ def estimate_head_pose(landmarks, frame_width, frame_height):
     except Exception as e:
         print("head pose error:", e)
         return _invalid_result()
+
+
+def estimate_sqpnp_headpose(landmarks, frame_width, frame_height):
+    """
+    SQPnP 기반 실험용 head pose 추정 함수입니다.
+    기존 estimate_head_pose() 동작은 유지하기 위해 별도 함수로 둡니다.
+    """
+
+    if landmarks is None:
+        return _invalid_result()
+
+    if frame_width <= 0 or frame_height <= 0:
+        return _invalid_result()
+
+    try:
+        lm = landmarks.landmark
+
+        image_points = np.array(
+            [
+                [
+                    lm[FACE_2D_INDICES["nose_tip"]].x * frame_width,
+                    lm[FACE_2D_INDICES["nose_tip"]].y * frame_height
+                ],
+                [
+                    lm[FACE_2D_INDICES["chin"]].x * frame_width,
+                    lm[FACE_2D_INDICES["chin"]].y * frame_height
+                ],
+                [
+                    lm[FACE_2D_INDICES["left_eye_outer"]].x * frame_width,
+                    lm[FACE_2D_INDICES["left_eye_outer"]].y * frame_height
+                ],
+                [
+                    lm[FACE_2D_INDICES["right_eye_outer"]].x * frame_width,
+                    lm[FACE_2D_INDICES["right_eye_outer"]].y * frame_height
+                ],
+                [
+                    lm[FACE_2D_INDICES["left_mouth"]].x * frame_width,
+                    lm[FACE_2D_INDICES["left_mouth"]].y * frame_height
+                ],
+                [
+                    lm[FACE_2D_INDICES["right_mouth"]].x * frame_width,
+                    lm[FACE_2D_INDICES["right_mouth"]].y * frame_height
+                ],
+            ],
+            dtype=np.float64
+        )
+
+        focal_length = frame_width
+
+        camera_matrix = np.array(
+            [
+                [focal_length, 0, frame_width / 2],
+                [0, focal_length, frame_height / 2],
+                [0, 0, 1],
+            ],
+            dtype=np.float64
+        )
+
+        dist_coeffs = np.zeros((4, 1), dtype=np.float64)
+
+        success, rotation_vector, translation_vector = cv2.solvePnP(
+            FACE_3D_MODEL,
+            image_points,
+            camera_matrix,
+            dist_coeffs,
+            flags=cv2.SOLVEPNP_SQPNP
+        )
+
+        if not success:
+            return _invalid_result()
+
+        rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
+
+        yaw, pitch, roll = rotation_matrix_to_euler_angles(rotation_matrix)
+
+        left_eye = image_points[2]
+        right_eye = image_points[3]
+
+        face_scale = float(
+            np.linalg.norm(
+                right_eye - left_eye
+            )
+        )
+
+        tx = float(translation_vector[0][0])
+        ty = float(translation_vector[1][0])
+        tz = float(translation_vector[2][0])
+
+        face_center_x = float(
+            (
+                lm[FACE_2D_INDICES["nose_tip"]].x +
+                lm[FACE_2D_INDICES["left_eye_outer"]].x +
+                lm[FACE_2D_INDICES["right_eye_outer"]].x +
+                lm[FACE_2D_INDICES["left_mouth"]].x +
+                lm[FACE_2D_INDICES["right_mouth"]].x
+            ) / 5
+        )
+
+        face_center_y = float(
+            (
+                lm[FACE_2D_INDICES["nose_tip"]].y +
+                lm[FACE_2D_INDICES["left_eye_outer"]].y +
+                lm[FACE_2D_INDICES["right_eye_outer"]].y +
+                lm[FACE_2D_INDICES["left_mouth"]].y +
+                lm[FACE_2D_INDICES["right_mouth"]].y
+            ) / 5
+        )
+
+        return {
+            "valid": True,
+            "solver": "sqpnp",
+            "yaw": yaw,
+            "pitch": pitch,
+            "roll": roll,
+            "face_scale": face_scale,
+            "tx": tx,
+            "ty": ty,
+            "tz": tz,
+            "face_center_x": face_center_x,
+            "face_center_y": face_center_y,
+            "rotation_vector": rotation_vector.reshape(-1).tolist(),
+            "translation_vector": translation_vector.reshape(-1).tolist(),
+        }
+
+    except Exception as e:
+        print("sqpnp head pose error:", e)
+        return _invalid_result()

@@ -4,7 +4,12 @@ __pycache__/
 *.csv
 *.json
 *.png
+*.pkl
 .vscode/
+.claude/
+CLAUDE.md
 .calibration_results/
 .gaze_accuracy_results/
 .report/
+.env
+src/analysis/
