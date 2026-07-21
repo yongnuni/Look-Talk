@@ -156,56 +156,39 @@ class GazePipeline:
         alpha = 0.35
 
         if self.last_output is None:
-
+        # 첫 유효 좌표는 비교할 이전 좌표가 없으므로 그대로 사용
+            sx_s = float(sx_s)
+            sy_s = float(sy_s)
             self.last_output = [sx_s, sy_s]
 
         else:
+        # Dead Zone 계산 전에 이전 최종 출력 좌표 보존
+            prev_x, prev_y = self.last_output
 
-            sx_s = (
-                alpha * sx_s
-                + (1-alpha) * self.last_output[0]
-            )
+        # Kalman 결과에 EMA 적용
+            ema_x = (alpha * sx_s + (1 - alpha) * prev_x)
+            ema_y = (alpha * sy_s + (1 - alpha) * prev_y)
 
-            sy_s = (
-                alpha * sy_s
-                + (1-alpha) * self.last_output[1]
-            )
+        # 이전 최종 좌표와 새로운 EMA 좌표 사이의 실제 거리
+            movement = np.hypot(ema_x - prev_x,ema_y - prev_y)
 
-            self.last_output = [sx_s, sy_s]
+            # 이동량에 따라 Dead Zone 크기 결정
+            if movement < 10:
+                dead_zone = 5
+            elif movement < 40:
+                dead_zone = 10
+            else:
+                dead_zone = 20
 
-        if self.last_output is None:
-            self.last_output = [sx_s, sy_s]
-
-        velocity = np.hypot(
-
-            sx_s-self.last_output[0],
-
-            sy_s-self.last_output[1]
-
-        )
-
-        if velocity < 10:
-
-            dead_zone = 5
-
-        elif velocity < 40:
-
-            dead_zone = 10
-
-        else:
-
-            dead_zone = 20
-
-        dist = np.hypot(
-            sx_s - self.last_output[0],
-            sy_s - self.last_output[1]
-        )
-
-        if dist < dead_zone:
-            sx_s = self.last_output[0]
-            sy_s = self.last_output[1]
-        else:
-            self.last_output = [sx_s, sy_s]
+            if movement < dead_zone:
+            # 작은 흔들림은 무시
+                sx_s = prev_x
+                sy_s = prev_y
+            else:
+            # 의미 있는 이동만 반영
+                sx_s = ema_x
+                sy_s = ema_y
+                self.last_output = [sx_s, sy_s]
 
         # Fixation 감지
         if self.fixation_center is None:
