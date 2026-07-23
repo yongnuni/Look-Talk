@@ -205,11 +205,11 @@ class GazePipeline:
 
             # 이동량에 따라 Dead Zone 크기 결정
             if movement < 10:
-                dead_zone = 5
-            elif movement < 40:
                 dead_zone = 10
+            elif movement < 40:
+                dead_zone = 15
             else:
-                dead_zone = 20
+                dead_zone = 25
 
             if movement < dead_zone:
             # 작은 흔들림은 무시

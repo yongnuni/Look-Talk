@@ -16,7 +16,8 @@ import src.hangul as hangul
 from src.config import (
     SCREEN_W,
     SCREEN_H,
-    PX_PER_CM
+    PX_PER_CM,
+    GAZE_AVG_WINDOW,
 )
 
 from src.tracking.eye_tracking import (
@@ -1199,7 +1200,7 @@ def main():
                     elif use_pose_corrected:
                         version_name = "v0.1-pose-corrected"
                     else:
-                        version_name = "v0.1-raw"
+                        version_name = f"v0.3-raw-mean{GAZE_AVG_WINDOW}"
 
                     collector = MetricsCollector(
                         user_id="yejin",
@@ -1209,6 +1210,8 @@ def main():
                         calib_reproj_rmse_px=calibrator.calib_reproj_rmse_px,
                         use_pose_corrected=use_pose_corrected,
                         use_sqpnp_corrected=use_sqpnp_corrected,
+                        gaze_avg_window=GAZE_AVG_WINDOW,
+                        smoothing_mode="moving_average",
                     )
 
                     run_gaze_accuracy_test(

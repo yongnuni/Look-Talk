@@ -499,7 +499,7 @@ class Calibrator:
                     )
 
                     self.reset()
-                    return
+                    return 0.0
 
                 # ── 릿지 회귀 학습 (홈그래피와 병렬, 서로 독립) ──
                 self._fit_ridge()

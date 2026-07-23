@@ -20,11 +20,20 @@ from src.metrics.csv_export import append_rows
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.3"
+    SCHEMA_VERSION = "1.4"
 
-    def __init__(self, user_id="anonymous", dev_version="v0.1-raw", px_per_cm=None,
-                 calib_id=None, calib_reproj_rmse_px=None,
-                 use_pose_corrected=False, use_sqpnp_corrected=False):
+    def __init__(
+            self,
+            user_id="anonymous",
+            dev_version="v0.1-raw",
+            px_per_cm=None,
+            calib_id=None,
+            calib_reproj_rmse_px=None,
+            use_pose_corrected=False,
+            use_sqpnp_corrected=False,
+            gaze_avg_window=None,
+            smoothing_mode=None,
+    ):
     # 세션 단위 메타데이터 (sessions.csv 한 행)
         self.session_id = str(uuid.uuid4())
         self.user_id = user_id
@@ -32,6 +41,8 @@ class MetricsCollector:
         self.px_per_cm = px_per_cm
         self.calib_id = calib_id
         self.calib_reproj_rmse_px = calib_reproj_rmse_px
+        self.gaze_avg_window = gaze_avg_window
+        self.smoothing_mode = smoothing_mode
 
         if use_sqpnp_corrected:
             self.correction_mode = "sqpnp_corrected"
@@ -203,12 +214,8 @@ class MetricsCollector:
         if self.end_timestamp is None:
             self.end_session()
 
-        session_fields = [
-            "session_id", "user_id", "dev_version",
-            "start_timestamp", "end_timestamp",
-            "session_duration_total_ms", "px_per_cm",
-            "calib_id", "calib_reproj_rmse_px", "correction_mode", "schema_version",
-        ]
+        session_fields = ["session_id","user_id","dev_version","start_timestamp","end_timestamp","session_duration_total_ms",
+                          "px_per_cm","calib_id","calib_reproj_rmse_px","correction_mode","gaze_avg_window","smoothing_mode","schema_version",]
         session_row = {
             "session_id": self.session_id,
             "user_id": self.user_id,
@@ -224,6 +231,8 @@ class MetricsCollector:
                 else None
             ),
             "correction_mode": self.correction_mode,
+            "gaze_avg_window": self.gaze_avg_window,
+            "smoothing_mode": self.smoothing_mode,
             "schema_version": self.SCHEMA_VERSION,
         }
         self._append_rows(sessions_path, session_fields, [session_row])
