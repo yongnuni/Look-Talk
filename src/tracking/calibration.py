@@ -475,6 +475,31 @@ class Calibrator:
                             )
                         )
                     )
+                # 캘리브레이션 품질 검사
+                max_calib_rmse_px = 150.0
+
+                if (
+                    self.H is None
+                    or self.calib_reproj_rmse_px is None
+                    or self.calib_reproj_rmse_px > max_calib_rmse_px
+                ):
+                    rmse_text = (
+                        f"{self.calib_reproj_rmse_px:.1f}px"
+                        if self.calib_reproj_rmse_px is not None
+                        else "계산 불가"
+                    )
+
+                    print(
+                        "[calibration] 품질 불량: "
+                        f"homography RMSE {rmse_text}"
+                    )
+                    print(
+                        "[calibration] 자동으로 "
+                        "재캘리브레이션을 시작합니다."
+                    )
+
+                    self.reset()
+                    return
 
                 # ── 릿지 회귀 학습 (홈그래피와 병렬, 서로 독립) ──
                 self._fit_ridge()

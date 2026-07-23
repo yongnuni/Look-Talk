@@ -1,11 +1,15 @@
 import cv2
 import numpy as np
+from collections import deque
+
 
 from src.config import (
+    GAZE_AVG_WINDOW,
     SMOOTH_ALPHA,
     FIXATION_RADIUS,
     FIXATION_FRAMES
 )
+
 
 
 class GazePipeline:
@@ -14,6 +18,11 @@ class GazePipeline:
         self.fixation_center = None
         self.fixation_count = 0
         self.last_output = None
+
+        # 최근 화면 좌표를 저장하는 이동평균 버퍼
+        self.gaze_buffer = deque(
+            maxlen=GAZE_AVG_WINDOW
+        )
 
         self.kalman = cv2.KalmanFilter(4, 2)
 
@@ -49,6 +58,7 @@ class GazePipeline:
         self.fixation_center = None
         self.fixation_count = 0
         self.last_output = None
+        self.gaze_buffer.clear()
 
         self.kalman.statePost = np.zeros(
             (4, 1),
@@ -64,6 +74,7 @@ class GazePipeline:
         self.fixation_center = None
         self.fixation_count = 0
         self.last_output = None
+        self.gaze_buffer.clear()
         self.initialized = False
 
     def _is_head_pose_valid(self, head_pose):
@@ -122,7 +133,27 @@ class GazePipeline:
         #if not self._is_head_pose_valid(head_pose):
         #    self._reset_tracking_state()
         #    return -1, -1, 0
+        # 최근 화면 좌표를 버퍼에 저장
+        self.gaze_buffer.append(
+            (
+                float(sx),
+                float(sy)
+            )
+        )
 
+        # 현재까지 저장된 좌표들의 평균을 Kalman 입력으로 사용
+        buffer_array = np.asarray(
+            self.gaze_buffer,
+            dtype=np.float32
+        )
+
+        sx = float(
+            np.mean(buffer_array[:, 0])
+        )
+
+        sy = float(
+            np.mean(buffer_array[:, 1])
+        )
         # Kalman Filter
         if not self.initialized:
 
