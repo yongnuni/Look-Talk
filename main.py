@@ -163,10 +163,7 @@ def run_gaze_accuracy_test(
         target_x = int(SCREEN_W * rx)
         target_y = int(SCREEN_H * ry)
 
-        # 목표 지점이 바뀔 때 이전 지점의
-        # Kalman·EMA·Dead Zone·Fixation 상태를 초기화
-        gaze.reset()
-
+        
         collector.start_target(idx, target_x, target_y)
 
         samples_x = []
