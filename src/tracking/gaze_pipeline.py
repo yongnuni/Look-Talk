@@ -216,9 +216,24 @@ class GazePipeline:
                 sx_s = prev_x
                 sy_s = prev_y
             else:
-            # 의미 있는 이동만 반영
-                sx_s = ema_x
-                sy_s = ema_y
+            # 한 프레임에 이동할 수 있는 최대 거리 제한
+                dx = ema_x - prev_x
+                dy = ema_y - prev_y
+
+                step_distance = np.hypot(dx, dy)
+
+                max_step_px = 50.0
+
+                if step_distance > max_step_px:
+                    scale = max_step_px / step_distance
+
+                    sx_s = prev_x + dx * scale
+                    sy_s = prev_y + dy * scale
+
+                else:
+                    sx_s = ema_x
+                    sy_s = ema_y
+
                 self.last_output = [sx_s, sy_s]
 
         # Fixation 감지
