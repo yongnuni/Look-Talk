@@ -39,11 +39,20 @@ from src.tracking.mouth import (
     mouth_aspect_ratio
 )
 
-from src.tracking.calibration import Calibrator
 from src.calibrations.mouth_calibration import MouthCalibration
 from src.tracking.gaze_pipeline import GazePipeline
 from src.tracking.dwell import DwellController
 from src.tracking.head_pose import estimate_head_pose, estimate_sqpnp_headpose
+
+from src.tracking.mappers.factory import (
+    create_mapper,
+    MODE_CALIBRATED,
+    MODE_NO_CALIBRATION,
+    AVAILABLE_MODES,
+    DEFAULT_NO_CALIBRATION_STRATEGY,
+)
+from src.tracking.mappers.strategies import available_strategies
+from src.metrics.session_logger import SessionLogger
 
 # ── 하이브리드(백본+릿지) 모듈 ──
 from src.tracking.gaze_backbone import GazeBackbone
@@ -489,7 +498,7 @@ def show_session_popup(session_id):
     except Exception as e:
         print(f"[popup] 시각화 실패: {e}")
 
-def main():
+def main(mode=MODE_CALIBRATED, strategy_name=None):
 
     cap = cv2.VideoCapture(0)
 
@@ -513,7 +522,7 @@ def main():
         cv2.WINDOW_FULLSCREEN
     )
 
-    calibrator = Calibrator()
+    mapper = create_mapper(mode, strategy_name)
     mouth_calibrator = MouthCalibration()
     gaze = GazePipeline()
     dwell = DwellController()
@@ -531,14 +540,17 @@ def main():
 
     is_korean = True
     is_shift = False
-    use_pose_corrected = False
-    use_sqpnp_corrected = False
-    use_ridge = False
-    show_all_markers = False   # b 키로 토글: 네 모드 좌표를 동시에 마커로 표시
-    mode_cycle_index = 0       # c 키: 0=raw, 1=pose, 2=sqpnp, 3=ridge 순환
+    show_all_markers = False   # b 키로 토글: 후보 좌표를 동시에 마커로 표시
 
     mouth_mode = False
     show_debug_overlay = False   # d 키로 토글: head pose/gaze 진단 텍스트 표시 여부
+
+    session_logger = SessionLogger(
+        mode=mode,
+        mapper_metadata=mapper.get_metadata(),
+        screen_w=SCREEN_W,
+        screen_h=SCREEN_H,
+    )
 
     last_session_id = None
 
@@ -557,14 +569,19 @@ def main():
     )
 
     print(
-        "Eye Keyboard 시작 | "
-        "r: 재캘리브레이션 | "
-        "t: 시선정확도테스트 | "
+        f"Eye Keyboard 시작 [mode={mode}] | "
+        "r: 재캘리브레이션/리셋 | "
+        "t: 시선정확도테스트(calibrated 전용) | "
         "m: 입벌림 입력 방식 변경 | "
-        "g: 릿지 하이브리드 모드 토글 | "
+        "p/h/g/o: 매핑 방식 전환(calibrated 전용) | "
+        "b: 후보 마커 토글 | "
         "d: 디버그 오버레이 토글 | "
         "q: 종료"
     )
+
+    if mode == MODE_NO_CALIBRATION:
+        print(f"[mode] no_calibration strategy: {mapper.active_method}")
+        print(f"[mode] strategy params: {mapper.get_metadata()['strategy_params']}")
 
     with mp_face_mesh.FaceMesh(
         max_num_faces=1,
@@ -577,8 +594,9 @@ def main():
             cap.release()
             cv2.destroyAllWindows()
             return
-        
-        show_calibration_guide()
+
+        if mode == MODE_CALIBRATED:
+            show_calibration_guide()
 
         while cap.isOpened():
 
@@ -610,23 +628,9 @@ def main():
             mar = 0.0
             blink_event = None
 
-            raw_sx = None
-            raw_sy = None
-            corrected_sx = None
-            corrected_sy = None
-            sqpnp_corrected_sx = None
-            sqpnp_corrected_sy = None
-            ridge_sx = None
-            ridge_sy = None
+            mapping_result = None
             sx = None
             sy = None
-
-            corrected_iris_x = None
-            corrected_iris_y = None
-            sqpnp_corrected_iris_x = None
-            sqpnp_corrected_iris_y = None
-            sqpnp_delta_x = None
-            sqpnp_delta_y = None
 
             features = None
 
@@ -647,9 +651,11 @@ def main():
             sqpnp_headpose = dict(head_pose)
 
             # 얼굴 미검출 프레임에도 캘리브레이션 화면 유지 (깜빡임 방지)
-            if not calibrator.done and not results.multi_face_landmarks:
+            # no_calibration 모드는 mapper.ready가 항상 True라 이 블록에
+            # 들어오지 않는다.
+            if not mapper.ready and not results.multi_face_landmarks:
 
-                draw_calib_screen(calib_canvas, calibrator, elapsed_ratio)
+                draw_calib_screen(calib_canvas, mapper.calibrator, elapsed_ratio)
                 cv2.imshow("Eye Keyboard", calib_canvas)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -657,7 +663,7 @@ def main():
                 if key == ord('q'):
                     break
                 elif key == ord('r'):
-                    calibrator.reset()
+                    mapper.reset()
 
                 continue
 
@@ -704,12 +710,14 @@ def main():
                     frame_width=fw
                 )
 
-                # ── 캘리브레이션 ──────────────────────────────
+                # ── 캘리브레이션 (calibrated 모드에서만 진입) ──────
+                # no_calibration 모드는 mapper.ready가 항상 True라
+                # 이 블록에 들어오지 않는다.
 
-                if not calibrator.done:
+                if not mapper.ready:
 
                     if not blink:
-                        elapsed_ratio = calibrator.update(
+                        elapsed_ratio = mapper.update_initialization(
                             iris_x,
                             iris_y,
                             conf,
@@ -717,7 +725,7 @@ def main():
                             features=features
                         )
 
-                    draw_calib_screen(calib_canvas, calibrator, elapsed_ratio)
+                    draw_calib_screen(calib_canvas, mapper.calibrator, elapsed_ratio)
                     cv2.imshow("Eye Keyboard", calib_canvas)
 
                     key = cv2.waitKey(1) & 0xFF
@@ -725,8 +733,8 @@ def main():
                     if key == ord('q'):
                         break
                     elif key == ord('r'):
-                        calibrator.reset()
-                   
+                        mapper.reset()
+
                     continue
                 # ── 입벌림 캘리브레이션 ─────────────────────────
                 if mouth_mode and not mouth_calibrator.done:
@@ -769,85 +777,23 @@ def main():
 
                     continue
 
-                # ── 시선 파이프라인 ───────────────────────────
-                # 1. 기존 방식 Raw 좌표
-                raw_sx, raw_sy = calibrator.map_to_screen(
-                    iris_x,
-                    iris_y
-                )
-
-                # 2. face center / scale 기반 iris 입력 보정
-                corrected_iris_x, corrected_iris_y = calibrator.compensate_iris_by_head_pose(
+                # ── 시선 매핑 (calibrated/no_calibration 공통 경계) ──
+                # 최종 좌표 선택 알고리즘은 여기서 알지 못한다 — mapper가 다
+                # 계산해서 MappingResult로 돌려준다.
+                mapping_result = mapper.map(
                     iris_x,
                     iris_y,
-                    head_pose
+                    head_pose=head_pose,
+                    features=features,
+                    sqpnp_head_pose=sqpnp_headpose,
                 )
 
-                # 3. 보정된 iris 좌표를 다시 화면 좌표로 변환
-                corrected_sx, corrected_sy = calibrator.map_to_screen(
-                    corrected_iris_x,
-                    corrected_iris_y
-                )
-
-                sqpnp_corrected_iris_x, sqpnp_corrected_iris_y = calibrator.compensate_iris_by_head_pose(
-                    iris_x,
-                    iris_y,
-                    sqpnp_headpose
-                )
-
-                sqpnp_corrected_sx, sqpnp_corrected_sy = calibrator.map_to_screen(
-                    sqpnp_corrected_iris_x,
-                    sqpnp_corrected_iris_y
-                )
-
-                if (
-                    use_sqpnp_corrected
-                    and raw_sx is not None
-                    and raw_sy is not None
-                    and sqpnp_corrected_sx is not None
-                    and sqpnp_corrected_sy is not None
-                ):
-                    sqpnp_delta_x = np.clip(
-                        sqpnp_corrected_sx - raw_sx,
-                        -MAX_SQPNP_DELTA_PX,
-                        MAX_SQPNP_DELTA_PX
-                    )
-                    sqpnp_delta_y = np.clip(
-                        sqpnp_corrected_sy - raw_sy,
-                        -MAX_SQPNP_DELTA_PX,
-                        MAX_SQPNP_DELTA_PX
-                    )
-                    sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
-                    sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
-
-                # 3.5. 릿지 하이브리드 좌표 (특징 벡터 → 화면 좌표)
-                ridge_sx, ridge_sy = calibrator.map_to_screen_features(
-                    features
-                )
-
-                # 모드 우선순위: ridge > sqpnp > pose > raw
-                # 릿지 모드인데 이번 프레임 릿지 좌표가 None이면
-                # (특징 결손, 릿지 미학습 등) raw로 폴백해 커서를 유지합니다.
-                if use_ridge and ridge_sx is not None and ridge_sy is not None:
-                    sx, sy = ridge_sx, ridge_sy
-                elif use_ridge:
-                    sx, sy = raw_sx, raw_sy
-                elif use_sqpnp_corrected:
-                    sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
-                elif use_pose_corrected:
-                    sx, sy = corrected_sx, corrected_sy
-                else:
-                    sx, sy = raw_sx, raw_sy
+                sx, sy = mapping_result.x, mapping_result.y
 
                 # 4. 최종 gaze pipeline 입력 전 좌표 유효성 검사
                 # 화면 가장자리 좌표는 invalid로 보지 않음.
                 # None / NaN / inf 같은 진짜 비정상값만 막음.
-                screen_coord_valid = (
-                    sx is not None
-                    and sy is not None
-                    and np.isfinite(sx)
-                    and np.isfinite(sy)
-                )
+                screen_coord_valid = mapping_result.valid
 
                 tracking_valid = False
 
@@ -960,9 +906,31 @@ def main():
 
             if tester.is_showing_complete():
                 kbd_bg = draw_test_complete_overlay(kbd_bg)
-            
+
+            # ── 공통 세션 로깅 (calibrated/no_calibration 공통, mapper와 무관) ──
+            session_logger.log_frame(
+                active_method=(
+                    mapping_result.active_method if mapping_result is not None else None
+                ),
+                raw_iris_x=iris_x,
+                raw_iris_y=iris_y,
+                mapped_sx=sx,
+                mapped_sy=sy,
+                mapping_valid=(
+                    mapping_result.valid if mapping_result is not None else False
+                ),
+                gaze_x=gaze_x,
+                gaze_y=gaze_y,
+                hovered_key=hovered_key,
+                dwell_ratio=dwell_ratio,
+                clicked_key=clicked_key,
+                input_text_len=len(current_text),
+            )
+
             # ── 디버그 오버레이 (head pose / gaze 좌표 진단) ──────────
             # d 키로 표시 여부만 토글. 계산 로직 자체는 항상 실행됨.
+            # 내용은 모드별로 다르다 — main.py는 mapping_result만 읽고,
+            # raw/pose/sqpnp/ridge 후보 계산 자체는 하지 않는다.
             if show_debug_overlay:
 
                 mar_text = f"MAR: {mar:.2f}"   #입벌림 지표 표시
@@ -994,140 +962,202 @@ def main():
                     2
                 )
 
-                pose_delta = calibrator.get_pose_delta(head_pose)
+                if mode == MODE_CALIBRATED:
 
-                if pose_delta is not None:
-                    delta_text = (
-                        f"dCenter:({pose_delta['delta_center_x']:.4f},"
-                        f"{pose_delta['delta_center_y']:.4f}) "
-                        f"dScale:{pose_delta['delta_scale']:.1f}"
-                    )
-                else:
-                    delta_text = "dCenter:(None,None) dScale:None"
+                    pose_delta = mapper.calibrator.get_pose_delta(head_pose)
 
-                cv2.putText(
-                    kbd_bg,
-                    delta_text,
-                    (30, SCREEN_H - 210),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
-                    2
-                )
-
-                if use_ridge:
-                    mode_text = "Mode: RidgeHybrid"
-                elif use_sqpnp_corrected:
-                    mode_text = "Mode: SQPnP"
-                else:
-                    mode_text = "Mode: PoseCorrected" if use_pose_corrected else "Mode: Raw"
-
-                cv2.putText(
-                    kbd_bg,
-                    mode_text,
-                    (30, SCREEN_H - 180),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0) if (use_pose_corrected or use_sqpnp_corrected or use_ridge) else (255, 255, 255),
-                    2
-                )
-
-                if sqpnp_delta_x is not None and sqpnp_delta_y is not None:
-                    sqpnp_delta_text = f"d:({int(sqpnp_delta_x)},{int(sqpnp_delta_y)})"
-                else:
-                    sqpnp_delta_text = "d:(None,None)"
-
-                sqpnp_mode_text = (
-                    f"SQPnP: ON {sqpnp_delta_text}"
-                    if use_sqpnp_corrected
-                    else "SQPnP: OFF"
-                )
-
-                cv2.putText(
-                    kbd_bg,
-                    sqpnp_mode_text,
-                    (30, SCREEN_H - 240),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0) if use_sqpnp_corrected else (255, 255, 255),
-                    2
-                )
-
-                # ── 릿지/백본 상태 표시 ──
-                if last_gaze_vec is not None:
-                    gaze_vec_text = f"GazeVec:({last_gaze_vec[0]:.1f},{last_gaze_vec[1]:.1f})"
-                else:
-                    gaze_vec_text = "GazeVec:(None)"
-
-                ridge_status_text = (
-                    f"Ridge: {'FIT' if calibrator.ridge.fitted else 'NOT_FIT'} "
-                    f"Backbone: {'ON' if backbone.available else 'OFF'} "
-                    f"{gaze_vec_text} "
-                    f"RidgeXY:({ridge_sx},{ridge_sy})"
-                )
-
-                cv2.putText(
-                    kbd_bg,
-                    ridge_status_text,
-                    (30, SCREEN_H - 270),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0) if use_ridge else (255, 255, 255),
-                    2
-                )
-
-                coord_text = (
-                    f"Raw:({raw_sx},{raw_sy}) "
-                    f"PoseCorrected:({corrected_sx},{corrected_sy}) "
-                    f"SQPnP:({sqpnp_corrected_sx},{sqpnp_corrected_sy}) "
-                    f"Active:({sx},{sy}) "
-                    f"Gaze:({gaze_x},{gaze_y}) "
-                    f"Iris:({iris_x:.4f},{iris_y:.4f})"
-                )
-
-                cv2.putText(
-                    kbd_bg,
-                    coord_text,
-                    (30, SCREEN_H - 120),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
-                    2
-                )
-
-                if corrected_iris_x is not None and corrected_iris_y is not None:
-                    corrected_iris_text = (
-                        f"Corrected Iris:({corrected_iris_x:.4f},{corrected_iris_y:.4f})"
-                    )
-                else:
-                    corrected_iris_text = "Corrected Iris:(None,None)"
-
-                cv2.putText(
-                    kbd_bg,
-                    corrected_iris_text,
-                    (30, SCREEN_H - 150),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
-                    2
-                )
-
-            # ── 네 모드 좌표 동시 표시 (비교용, 클릭에는 영향 없음) ──
-            if show_all_markers:
-                # (좌표, 색, 라벨) — 색은 BGR
-                mode_markers = [
-                    (raw_sx, raw_sy, (255, 255, 255), "R"),              # raw: 흰색
-                    (corrected_sx, corrected_sy, (0, 255, 0), "P"),      # pose: 초록
-                    (sqpnp_corrected_sx, sqpnp_corrected_sy, (0, 165, 255), "S"),  # sqpnp: 주황
-                    (ridge_sx, ridge_sy, (255, 0, 255), "G"),            # ridge: 자홍
-                ]
-                for mx, my, color, label in mode_markers:
-                    if mx is not None and my is not None:
-                        cv2.circle(kbd_bg, (int(mx), int(my)), 12, color, 2)
-                        cv2.putText(
-                            kbd_bg, label, (int(mx) + 14, int(my) - 14),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
+                    if pose_delta is not None:
+                        delta_text = (
+                            f"dCenter:({pose_delta['delta_center_x']:.4f},"
+                            f"{pose_delta['delta_center_y']:.4f}) "
+                            f"dScale:{pose_delta['delta_scale']:.1f}"
                         )
+                    else:
+                        delta_text = "dCenter:(None,None) dScale:None"
+
+                    cv2.putText(
+                        kbd_bg,
+                        delta_text,
+                        (30, SCREEN_H - 210),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 0),
+                        2
+                    )
+
+                    active_method = mapper.active_method
+                    mode_text = f"Mode: {active_method}"
+
+                    cv2.putText(
+                        kbd_bg,
+                        mode_text,
+                        (30, SCREEN_H - 180),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0) if active_method != "raw" else (255, 255, 255),
+                        2
+                    )
+
+                    meta = mapping_result.metadata if mapping_result is not None else {}
+                    sqpnp_delta_x = meta.get("sqpnp_delta_x")
+                    sqpnp_delta_y = meta.get("sqpnp_delta_y")
+
+                    if sqpnp_delta_x is not None and sqpnp_delta_y is not None:
+                        sqpnp_delta_text = f"d:({int(sqpnp_delta_x)},{int(sqpnp_delta_y)})"
+                    else:
+                        sqpnp_delta_text = "d:(None,None)"
+
+                    sqpnp_mode_text = (
+                        f"SQPnP: ON {sqpnp_delta_text}"
+                        if active_method == "sqpnp_corrected"
+                        else "SQPnP: OFF"
+                    )
+
+                    cv2.putText(
+                        kbd_bg,
+                        sqpnp_mode_text,
+                        (30, SCREEN_H - 240),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 0) if active_method == "sqpnp_corrected" else (255, 255, 255),
+                        2
+                    )
+
+                    # ── 릿지/백본 상태 표시 ──
+                    if last_gaze_vec is not None:
+                        gaze_vec_text = f"GazeVec:({last_gaze_vec[0]:.1f},{last_gaze_vec[1]:.1f})"
+                    else:
+                        gaze_vec_text = "GazeVec:(None)"
+
+                    ridge_sx, ridge_sy = (
+                        (mapping_result.candidates.get("ridge_hybrid") or (None, None))
+                        if mapping_result is not None else (None, None)
+                    )
+
+                    ridge_status_text = (
+                        f"Ridge: {'FIT' if mapper.calibrator.ridge.fitted else 'NOT_FIT'} "
+                        f"Backbone: {'ON' if backbone.available else 'OFF'} "
+                        f"{gaze_vec_text} "
+                        f"RidgeXY:({ridge_sx},{ridge_sy})"
+                    )
+
+                    cv2.putText(
+                        kbd_bg,
+                        ridge_status_text,
+                        (30, SCREEN_H - 270),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 0) if active_method == "ridge_hybrid" else (255, 255, 255),
+                        2
+                    )
+
+                    candidates = mapping_result.candidates if mapping_result is not None else {}
+                    raw_xy = candidates.get("raw") or (None, None)
+                    pose_xy = candidates.get("pose_corrected") or (None, None)
+                    sqpnp_xy = candidates.get("sqpnp_corrected") or (None, None)
+
+                    coord_text = (
+                        f"Raw:{raw_xy} "
+                        f"PoseCorrected:{pose_xy} "
+                        f"SQPnP:{sqpnp_xy} "
+                        f"Active:({sx},{sy}) "
+                        f"Gaze:({gaze_x},{gaze_y}) "
+                        f"Iris:({iris_x:.4f},{iris_y:.4f})"
+                    )
+
+                    cv2.putText(
+                        kbd_bg,
+                        coord_text,
+                        (30, SCREEN_H - 120),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 0),
+                        2
+                    )
+
+                    corrected_iris_x = meta.get("corrected_iris_x")
+                    corrected_iris_y = meta.get("corrected_iris_y")
+
+                    if corrected_iris_x is not None and corrected_iris_y is not None:
+                        corrected_iris_text = (
+                            f"Corrected Iris:({corrected_iris_x:.4f},{corrected_iris_y:.4f})"
+                        )
+                    else:
+                        corrected_iris_text = "Corrected Iris:(None,None)"
+
+                    cv2.putText(
+                        kbd_bg,
+                        corrected_iris_text,
+                        (30, SCREEN_H - 150),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 0),
+                        2
+                    )
+
+                else:
+                    # ── no_calibration 모드용 간단 디버그 텍스트 ──
+                    meta = mapping_result.metadata if mapping_result is not None else {}
+                    method = mapping_result.active_method if mapping_result is not None else "N/A"
+
+                    nc_text = (
+                        f"Mode: no_calibration ({method}) "
+                        f"Valid:{screen_coord_valid} "
+                        f"Mapped:({sx},{sy}) "
+                        f"Gaze:({gaze_x},{gaze_y}) "
+                        f"Iris:({iris_x:.4f},{iris_y:.4f})"
+                    )
+
+                    cv2.putText(
+                        kbd_bg,
+                        nc_text,
+                        (30, SCREEN_H - 120),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 0),
+                        2
+                    )
+
+                    params_text = f"Params: {meta.get('strategy_params')}"
+
+                    cv2.putText(
+                        kbd_bg,
+                        params_text,
+                        (30, SCREEN_H - 150),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (200, 200, 200),
+                        2
+                    )
+
+            # ── 후보 좌표 마커 동시 표시 (비교용, 클릭에는 영향 없음) ──
+            if show_all_markers and mapping_result is not None:
+                # 알려진 calibrated 후보 이름은 기존 색/라벨을 그대로 쓰고,
+                # 새 strategy 등 미지의 후보 이름은 기본 색으로 대체한다.
+                marker_style = {
+                    "raw": ((255, 255, 255), "R"),
+                    "pose_corrected": ((0, 255, 0), "P"),
+                    "sqpnp_corrected": ((0, 165, 255), "S"),
+                    "ridge_hybrid": ((255, 0, 255), "G"),
+                }
+
+                for name, xy in mapping_result.candidates.items():
+                    if xy is None:
+                        continue
+
+                    mx, my = xy
+                    if mx is None or my is None:
+                        continue
+
+                    color, label = marker_style.get(
+                        name, ((0, 200, 200), name[:1].upper() if name else "?")
+                    )
+
+                    cv2.circle(kbd_bg, (int(mx), int(my)), 12, color, 2)
+                    cv2.putText(
+                        kbd_bg, label, (int(mx) + 14, int(my) - 14),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
+                    )
 
             kbd_bg = draw_gaze_cursor(kbd_bg, gaze_x, gaze_y, fixation_count)
             kbd_bg = draw_status_bar(kbd_bg, is_korean, fixation_count)
@@ -1140,46 +1170,58 @@ def main():
                 break
 
             elif key == ord('r'):
-                calibrator.reset()
+                mapper.reset()
                 gaze.reset()
 
-                if not show_countdown(cap, face_mesh):
-                    break
+                if mode == MODE_CALIBRATED:
+                    if not show_countdown(cap, face_mesh):
+                        break
+                else:
+                    print("[mode] no_calibration strategy/gaze 상태를 초기화했습니다.")
+
             elif key == ord('p'):
-                use_pose_corrected = not use_pose_corrected
-                if use_pose_corrected:          # 켤 때만 나머지를 끔
-                    use_sqpnp_corrected = False
-                    use_ridge = False
-                gaze.reset()
-                print("use_pose_corrected:", use_pose_corrected)
-                show_calibration_guide()
+                if mode == MODE_CALIBRATED:
+                    new_method = (
+                        "raw" if mapper.active_method == "pose_corrected" else "pose_corrected"
+                    )
+                    mapper.set_active_method(new_method)
+                    gaze.reset()
+                    print("active_method:", mapper.active_method)
+                    show_calibration_guide()
+                else:
+                    print("[mode] p 키는 calibrated 모드 전용입니다.")
 
             elif key == ord('h'):
-                use_sqpnp_corrected = not use_sqpnp_corrected
-                if use_sqpnp_corrected:          # 켤 때만 나머지를 끔
-                    use_pose_corrected = False
-                    use_ridge = False
-                gaze.reset()
-                print("use_sqpnp_corrected:", use_sqpnp_corrected)
+                if mode == MODE_CALIBRATED:
+                    new_method = (
+                        "raw" if mapper.active_method == "sqpnp_corrected" else "sqpnp_corrected"
+                    )
+                    mapper.set_active_method(new_method)
+                    gaze.reset()
+                    print("active_method:", mapper.active_method)
+                else:
+                    print("[mode] h 키는 calibrated 모드 전용입니다.")
 
             elif key == ord('g'):
-                # 릿지 하이브리드 모드 토글
-                if not calibrator.ridge.fitted:
-                    print("[ridge] 아직 학습되지 않았습니다. 캘리브레이션(r)을 먼저 완료하세요.")
-                use_ridge = not use_ridge
-                if use_ridge:          # 켤 때만 나머지를 끔
-                    use_sqpnp_corrected = False
-                    use_pose_corrected = False
-                gaze.reset()
-                print("use_ridge:", use_ridge)
-            
+                if mode == MODE_CALIBRATED:
+                    # 릿지 하이브리드 모드 토글 (fitted 여부 경고는 set_active_method 내부에서 처리)
+                    new_method = (
+                        "raw" if mapper.active_method == "ridge_hybrid" else "ridge_hybrid"
+                    )
+                    mapper.set_active_method(new_method)
+                    gaze.reset()
+                    print("active_method:", mapper.active_method)
+                else:
+                    print("[mode] g 키는 calibrated 모드 전용입니다.")
+
             elif key == ord('o'):
-                # raw 전용 키: 모든 보정 모드를 꺼서 순수 raw로 전환
-                use_pose_corrected = False
-                use_sqpnp_corrected = False
-                use_ridge = False
-                gaze.reset()
-                print("[mode] Raw로 전환")
+                if mode == MODE_CALIBRATED:
+                    # raw 전용 키: 모든 보정 모드를 꺼서 순수 raw로 전환
+                    mapper.set_active_method("raw")
+                    gaze.reset()
+                    print("[mode] Raw로 전환")
+                else:
+                    print("[mode] o 키는 calibrated 모드 전용입니다.")
 
             elif key == ord('b'):
                 show_all_markers = not show_all_markers
@@ -1197,9 +1239,16 @@ def main():
 
             elif key == ord('t'):
 
-                 if calibrator.done:
+                 if mode != MODE_CALIBRATED:
+                    print("[test] 정확도 테스트는 현재 calibrated 모드에서만 지원됩니다.")
+
+                 elif mapper.ready:
 
                     gaze.reset()
+
+                    use_pose_corrected = mapper.active_method == "pose_corrected"
+                    use_sqpnp_corrected = mapper.active_method == "sqpnp_corrected"
+                    use_ridge = mapper.active_method == "ridge_hybrid"
 
                     if use_ridge:
                         version_name = "v0.2-ridge-hybrid"
@@ -1214,8 +1263,8 @@ def main():
                         user_id="yejin",
                         dev_version=version_name,
                         px_per_cm=PX_PER_CM,
-                        calib_id=calibrator.calib_id,
-                        calib_reproj_rmse_px=calibrator.calib_reproj_rmse_px,
+                        calib_id=mapper.calibrator.calib_id,
+                        calib_reproj_rmse_px=mapper.calibrator.calib_reproj_rmse_px,
                         use_pose_corrected=use_pose_corrected,
                         use_sqpnp_corrected=use_sqpnp_corrected,
                     )
@@ -1223,7 +1272,7 @@ def main():
                     run_gaze_accuracy_test(
                         cap,
                         face_mesh,
-                        calibrator,
+                        mapper.calibrator,
                         gaze,
                         collector,
                         blink_detector,
@@ -1235,6 +1284,8 @@ def main():
 
                     last_session_id = collector.session_id
 
+    session_logger.close()
+
     cap.release()
     cv2.destroyAllWindows()
 
@@ -1243,5 +1294,48 @@ def main():
         show_session_popup(last_session_id)
 
 
+def _parse_args():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Look-Talk Eye Keyboard")
+
+    parser.add_argument(
+        "--gaze-mode",
+        dest="gaze_mode",
+        choices=list(AVAILABLE_MODES),
+        default=MODE_CALIBRATED,
+        help=(
+            "시선 매핑 모드. 'calibrated'(기본값)는 기존 16점 캘리브레이션을 "
+            "사용하고, 'no_calibration'은 캘리브레이션 화면 없이 바로 "
+            "키보드로 진입한다."
+        ),
+    )
+
+    parser.add_argument(
+        "--strategy",
+        dest="strategy",
+        default=None,
+        help=(
+            "no_calibration 모드에서 사용할 strategy 이름. 생략하면 "
+            f"기본값('{DEFAULT_NO_CALIBRATION_STRATEGY}')을 사용한다. "
+            f"사용 가능한 strategy: {', '.join(available_strategies()) or '(없음)'}"
+        ),
+    )
+
+    args = parser.parse_args()
+
+    if args.gaze_mode == MODE_NO_CALIBRATION:
+        name = args.strategy or DEFAULT_NO_CALIBRATION_STRATEGY
+        if name not in available_strategies():
+            available = ", ".join(available_strategies()) or "(없음)"
+            parser.error(
+                f"'{name}'은(는) 등록된 no_calibration strategy가 아닙니다. "
+                f"사용 가능한 strategy: {available}"
+            )
+
+    return args.gaze_mode, args.strategy
+
+
 if __name__ == "__main__":
-    main()
+    _mode, _strategy_name = _parse_args()
+    main(mode=_mode, strategy_name=_strategy_name)
