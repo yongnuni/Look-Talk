@@ -538,6 +538,7 @@ def main():
     mode_cycle_index = 0       # c 키: 0=raw, 1=pose, 2=sqpnp, 3=ridge 순환
 
     mouth_mode = False
+    show_debug_overlay = False   # d 키로 토글: head pose/gaze 진단 텍스트 표시 여부
 
     last_session_id = None
 
@@ -561,6 +562,7 @@ def main():
         "t: 시선정확도테스트 | "
         "m: 입벌림 입력 방식 변경 | "
         "g: 릿지 하이브리드 모드 토글 | "
+        "d: 디버그 오버레이 토글 | "
         "q: 종료"
     )
 
@@ -933,7 +935,7 @@ def main():
             # ── 렌더링 ────────────────────────────────────────
 
             kbd_bg = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
-            kbd_bg[:] = (30, 30, 30)
+            kbd_bg[:] = (245, 246, 248)
 
             current_text = (
                 hangul.finalText +
@@ -959,152 +961,156 @@ def main():
             if tester.is_showing_complete():
                 kbd_bg = draw_test_complete_overlay(kbd_bg)
             
-            mar_text = f"MAR: {mar:.2f}"   #입벌림 지표 표시
-            cv2.putText(
-                kbd_bg,
-                mar_text,
-                (SCREEN_W // 2 - 60, SCREEN_H - 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (255, 100, 0),
-                2
-            )
+            # ── 디버그 오버레이 (head pose / gaze 좌표 진단) ──────────
+            # d 키로 표시 여부만 토글. 계산 로직 자체는 항상 실행됨.
+            if show_debug_overlay:
 
-            pose_text = (
-                f"Valid:{head_pose['valid']} "
-                f"Yaw:{head_pose['yaw']:.1f} "
-                f"Pitch:{head_pose['pitch']:.1f} "
-                f"Roll:{head_pose['roll']:.1f} "
-                f"Scale:{head_pose['face_scale']:.1f} "
-                f"Center:({head_pose['face_center_x']:.2f},{head_pose['face_center_y']:.2f})"
-            )
-            cv2.putText(
-                kbd_bg,
-                pose_text,
-                (30, SCREEN_H - 80),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 255) if head_pose["valid"] else (0, 0, 255),
-                2
-            )
-
-            pose_delta = calibrator.get_pose_delta(head_pose)
-
-            if pose_delta is not None:
-                delta_text = (
-                    f"dCenter:({pose_delta['delta_center_x']:.4f},"
-                    f"{pose_delta['delta_center_y']:.4f}) "
-                    f"dScale:{pose_delta['delta_scale']:.1f}"
+                mar_text = f"MAR: {mar:.2f}"   #입벌림 지표 표시
+                cv2.putText(
+                    kbd_bg,
+                    mar_text,
+                    (SCREEN_W // 2 - 60, SCREEN_H - 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (255, 100, 0),
+                    2
                 )
-            else:
-                delta_text = "dCenter:(None,None) dScale:None"
 
-            cv2.putText(
-                kbd_bg,
-                delta_text,
-                (30, SCREEN_H - 210),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 0),
-                2
-            )
-
-            if use_ridge:
-                mode_text = "Mode: RidgeHybrid"
-            elif use_sqpnp_corrected:
-                mode_text = "Mode: SQPnP"
-            else:
-                mode_text = "Mode: PoseCorrected" if use_pose_corrected else "Mode: Raw"
-
-            cv2.putText(
-                kbd_bg,
-                mode_text,
-                (30, SCREEN_H - 180),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0) if (use_pose_corrected or use_sqpnp_corrected or use_ridge) else (255, 255, 255),
-                2
-            )
-
-            if sqpnp_delta_x is not None and sqpnp_delta_y is not None:
-                sqpnp_delta_text = f"d:({int(sqpnp_delta_x)},{int(sqpnp_delta_y)})"
-            else:
-                sqpnp_delta_text = "d:(None,None)"
-
-            sqpnp_mode_text = (
-                f"SQPnP: ON {sqpnp_delta_text}"
-                if use_sqpnp_corrected
-                else "SQPnP: OFF"
-            )
-
-            cv2.putText(
-                kbd_bg,
-                sqpnp_mode_text,
-                (30, SCREEN_H - 240),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0) if use_sqpnp_corrected else (255, 255, 255),
-                2
-            )
-
-            # ── 릿지/백본 상태 표시 ──
-            if last_gaze_vec is not None:
-                gaze_vec_text = f"GazeVec:({last_gaze_vec[0]:.1f},{last_gaze_vec[1]:.1f})"
-            else:
-                gaze_vec_text = "GazeVec:(None)"
-
-            ridge_status_text = (
-                f"Ridge: {'FIT' if calibrator.ridge.fitted else 'NOT_FIT'} "
-                f"Backbone: {'ON' if backbone.available else 'OFF'} "
-                f"{gaze_vec_text} "
-                f"RidgeXY:({ridge_sx},{ridge_sy})"
-            )
-
-            cv2.putText(
-                kbd_bg,
-                ridge_status_text,
-                (30, SCREEN_H - 270),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0) if use_ridge else (255, 255, 255),
-                2
-            )
-
-            coord_text = (
-                f"Raw:({raw_sx},{raw_sy}) "
-                f"PoseCorrected:({corrected_sx},{corrected_sy}) "
-                f"SQPnP:({sqpnp_corrected_sx},{sqpnp_corrected_sy}) "
-                f"Active:({sx},{sy}) "
-                f"Gaze:({gaze_x},{gaze_y}) "
-                f"Iris:({iris_x:.4f},{iris_y:.4f})"
-            )
-
-            cv2.putText(
-                kbd_bg,
-                coord_text,
-                (30, SCREEN_H - 120),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 0),
-                2
-            )
-
-            if corrected_iris_x is not None and corrected_iris_y is not None:
-                corrected_iris_text = (
-                    f"Corrected Iris:({corrected_iris_x:.4f},{corrected_iris_y:.4f})"
+                pose_text = (
+                    f"Valid:{head_pose['valid']} "
+                    f"Yaw:{head_pose['yaw']:.1f} "
+                    f"Pitch:{head_pose['pitch']:.1f} "
+                    f"Roll:{head_pose['roll']:.1f} "
+                    f"Scale:{head_pose['face_scale']:.1f} "
+                    f"Center:({head_pose['face_center_x']:.2f},{head_pose['face_center_y']:.2f})"
                 )
-            else:
-                corrected_iris_text = "Corrected Iris:(None,None)"
+                cv2.putText(
+                    kbd_bg,
+                    pose_text,
+                    (30, SCREEN_H - 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 255) if head_pose["valid"] else (0, 0, 255),
+                    2
+                )
 
-            cv2.putText(
-                kbd_bg,
-                corrected_iris_text,
-                (30, SCREEN_H - 150),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 0),
-                2
-            )
+                pose_delta = calibrator.get_pose_delta(head_pose)
+
+                if pose_delta is not None:
+                    delta_text = (
+                        f"dCenter:({pose_delta['delta_center_x']:.4f},"
+                        f"{pose_delta['delta_center_y']:.4f}) "
+                        f"dScale:{pose_delta['delta_scale']:.1f}"
+                    )
+                else:
+                    delta_text = "dCenter:(None,None) dScale:None"
+
+                cv2.putText(
+                    kbd_bg,
+                    delta_text,
+                    (30, SCREEN_H - 210),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 0),
+                    2
+                )
+
+                if use_ridge:
+                    mode_text = "Mode: RidgeHybrid"
+                elif use_sqpnp_corrected:
+                    mode_text = "Mode: SQPnP"
+                else:
+                    mode_text = "Mode: PoseCorrected" if use_pose_corrected else "Mode: Raw"
+
+                cv2.putText(
+                    kbd_bg,
+                    mode_text,
+                    (30, SCREEN_H - 180),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0) if (use_pose_corrected or use_sqpnp_corrected or use_ridge) else (255, 255, 255),
+                    2
+                )
+
+                if sqpnp_delta_x is not None and sqpnp_delta_y is not None:
+                    sqpnp_delta_text = f"d:({int(sqpnp_delta_x)},{int(sqpnp_delta_y)})"
+                else:
+                    sqpnp_delta_text = "d:(None,None)"
+
+                sqpnp_mode_text = (
+                    f"SQPnP: ON {sqpnp_delta_text}"
+                    if use_sqpnp_corrected
+                    else "SQPnP: OFF"
+                )
+
+                cv2.putText(
+                    kbd_bg,
+                    sqpnp_mode_text,
+                    (30, SCREEN_H - 240),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0) if use_sqpnp_corrected else (255, 255, 255),
+                    2
+                )
+
+                # ── 릿지/백본 상태 표시 ──
+                if last_gaze_vec is not None:
+                    gaze_vec_text = f"GazeVec:({last_gaze_vec[0]:.1f},{last_gaze_vec[1]:.1f})"
+                else:
+                    gaze_vec_text = "GazeVec:(None)"
+
+                ridge_status_text = (
+                    f"Ridge: {'FIT' if calibrator.ridge.fitted else 'NOT_FIT'} "
+                    f"Backbone: {'ON' if backbone.available else 'OFF'} "
+                    f"{gaze_vec_text} "
+                    f"RidgeXY:({ridge_sx},{ridge_sy})"
+                )
+
+                cv2.putText(
+                    kbd_bg,
+                    ridge_status_text,
+                    (30, SCREEN_H - 270),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0) if use_ridge else (255, 255, 255),
+                    2
+                )
+
+                coord_text = (
+                    f"Raw:({raw_sx},{raw_sy}) "
+                    f"PoseCorrected:({corrected_sx},{corrected_sy}) "
+                    f"SQPnP:({sqpnp_corrected_sx},{sqpnp_corrected_sy}) "
+                    f"Active:({sx},{sy}) "
+                    f"Gaze:({gaze_x},{gaze_y}) "
+                    f"Iris:({iris_x:.4f},{iris_y:.4f})"
+                )
+
+                cv2.putText(
+                    kbd_bg,
+                    coord_text,
+                    (30, SCREEN_H - 120),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 0),
+                    2
+                )
+
+                if corrected_iris_x is not None and corrected_iris_y is not None:
+                    corrected_iris_text = (
+                        f"Corrected Iris:({corrected_iris_x:.4f},{corrected_iris_y:.4f})"
+                    )
+                else:
+                    corrected_iris_text = "Corrected Iris:(None,None)"
+
+                cv2.putText(
+                    kbd_bg,
+                    corrected_iris_text,
+                    (30, SCREEN_H - 150),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 0),
+                    2
+                )
 
             # ── 네 모드 좌표 동시 표시 (비교용, 클릭에는 영향 없음) ──
             if show_all_markers:
@@ -1178,6 +1184,10 @@ def main():
             elif key == ord('b'):
                 show_all_markers = not show_all_markers
                 print("show_all_markers:", show_all_markers)
+
+            elif key == ord('d'):
+                show_debug_overlay = not show_debug_overlay
+                print("show_debug_overlay:", show_debug_overlay)
 
             elif key == ord('m'):
                 mouth_mode = True
