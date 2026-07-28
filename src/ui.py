@@ -604,8 +604,9 @@ def draw_status_bar(img, is_korean, fixation_count):
     draw = ImageDraw.Draw(img_pil)
 
     draw.text(
-        (20, SCREEN_H - 40),
-        "r : 재캘리브레이션   t : 시선정확도테스트   m : 입벌림 입력 방식 변경   o : raw / p : pose / h : SQPnP / g : Ridge / b : 전체마커표시   q : 종료",
+        (20, SCREEN_H - 60),
+        "r : 재캘리브레이션   t : 시선정확도테스트   m : 입벌림 입력 방식 변경\n"
+        "k : 커서 표시/숨기기   o : Raw   p : Pose   h : SQPnP   g : Ridge   b : 전체마커표시   q : 종료",
         font=small_font,
         fill=(150, 150, 150)
     )
