@@ -959,7 +959,15 @@ def main():
                 gaze_y = last_gaze_y
                 fixation_count = 0
 
-            kbd_bg = drawAll(kbd_bg, buttonList, gaze_x, gaze_y, dwell.dwell_key, dwell_ratio)
+            kbd_bg = drawAll(
+                kbd_bg,
+                buttonList,
+                gaze_x,
+                gaze_y,
+                dwell.dwell_key,
+                dwell_ratio,
+                show_cursor
+            )
 
             if tester.is_showing_complete():
                 kbd_bg = draw_test_complete_overlay(kbd_bg)

@@ -394,7 +394,8 @@ def drawAll(
     gaze_x,
     gaze_y,
     dwell_key,
-    dwell_ratio
+    dwell_ratio,
+    show_cursor
 ):
 
     img_pil = Image.fromarray(img)
@@ -414,9 +415,25 @@ def drawAll(
             y < gaze_y < y+h
         )
 
+        # 기본 크기
+        nx = x
+        ny = y
+        nw = w
+        nh = h
+
+        # k키 모드일 때만 확대
+        if on_key and not show_cursor:
+            scale = 1.20
+
+            nw = int(w * scale)
+            nh = int(h * scale)
+
+            nx = x - (nw - w) // 2
+            ny = y - (nh - h) // 2
+
         text_color = KEY_TEXT_COLOR
 
-        if on_key and dwell_key == key:
+        if on_key and dwell_key == key and show_cursor:
 
             t = dwell_ratio
 
@@ -433,10 +450,10 @@ def drawAll(
             if t > 0.5:
                 text_color = KEY_TEXT_COLOR_DWELL
 
-        elif on_key:
+        elif on_key and not show_cursor:
 
-            bg_color = HOVER_BG
-            border_color = HOVER_BORDER
+            bg_color = (255, 235, 0)
+            border_color = (255, 120, 0)
 
         else:
 
@@ -445,8 +462,17 @@ def drawAll(
 
         radius = int(min(w, h) * 0.18)
 
+        if on_key and not show_cursor:
+
+            draw.rounded_rectangle(
+                [nx-5, ny-5, nx+nw+5, ny+nh+5],
+                radius=radius+5,
+                outline=(255,255,0),
+                width=6
+            )
+
         draw.rounded_rectangle(
-            [x, y, x+w, y+h],
+            [nx, ny, nx+nw, ny+nh],
             radius=radius,
             fill=bg_color,
             outline=border_color,
@@ -467,10 +493,10 @@ def drawAll(
 
             draw.rounded_rectangle(
                 [
-                    x,
-                    y+h-6,
-                    x+bar_w,
-                    y+h
+                    nx,
+                    ny+nh-6,
+                    nx+bar_w,
+                    ny+nh
                 ],
                 radius=3,
                 fill=PROGRESS_BAR_COLOR
@@ -482,8 +508,8 @@ def drawAll(
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
 
-        text_x = x + (w - text_w) // 2 - bbox[0]
-        text_y = y + (h - text_h) // 2 - bbox[1]
+        text_x = nx + (nw - text_w)//2 - bbox[0]
+        text_y = ny + (nh - text_h)//2 - bbox[1]
 
         draw.text(
             (text_x, text_y),
