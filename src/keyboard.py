@@ -39,6 +39,27 @@ keys_eng_shift = [
     ["Z","X","C","V","B","N","M","<",">"]
 ]
 
+# ── 키보드 레이아웃 모드 ────────────────────────────────────────
+
+KEYBOARD_LAYOUT_QWERTY = "qwerty"
+KEYBOARD_LAYOUT_CHEONJIIN = "cheonjiin"
+
+
+# 표준 천지인 문자 코어
+# 빈 칸은 배열 위치만 유지하고 실제 버튼은 생성하지 않는다.
+CHEONJIIN_CHARACTER_ROWS = [
+    ["ㅣ", "ㆍ", "ㅡ"],
+    ["ㄱㅋ", "ㄴㄹ", "ㄷㅌ"],
+    ["ㅂㅍ", "ㅅㅎ", "ㅈㅊ"],
+    [None, "ㅇㅁ", None],
+]
+CHEONJIIN_CHARACTER_KEYS = {
+    key
+    for row in CHEONJIIN_CHARACTER_ROWS
+    for key in row
+    if key is not None
+}
+
 # 하단 기능키 행 — 문자 배열과 완전히 분리된 데이터
 FUNCTION_ROW_LEFT = ["Shift", "한/영"]
 FUNCTION_ROW_CENTER = " "
@@ -54,10 +75,17 @@ DISPLAY_LABELS = {
 
 
 class Button:
-    def __init__(self, pos, text, size=[85, 85]):
+    def __init__(
+        self,
+        pos,
+        text,
+        size=None,
+        font_role="default"
+    ):
         self.pos = pos
-        self.size = size
+        self.size = size or [85, 85]
         self.text = text
+        self.font_role = font_role
 
 
 def _clamp(value, lo, hi):
@@ -209,7 +237,57 @@ def calculate_keyboard_layout(screen_w, screen_h):
 
 
 LAYOUT = calculate_keyboard_layout(SCREEN_W, SCREEN_H)
+def calculate_cheonjiin_layout(screen_w, screen_h):
+    """
+    기존 입력창·자동완성·확인 버튼 위치를 유지하면서
+    천지인 3열 × 4행 문자 코어를 화면 중앙에 크게 배치한다.
+    """
 
+    base_layout = calculate_keyboard_layout(screen_w, screen_h)
+
+    key_gap_x = max(8, int(screen_w * 0.010))
+
+    # 쿼티보다 열 수가 적으므로 키 폭을 크게 설정한다.
+    key_w = _clamp(
+        int(screen_w * 0.13),
+        110,
+        180
+    )
+
+    key_h = base_layout["row_h"]
+
+    total_w = (
+        3 * key_w
+        + 2 * key_gap_x
+    )
+
+    start_x = (
+        screen_w - total_w
+    ) // 2
+
+    return {
+        **base_layout,
+
+        "cheonjiin_start_x": start_x,
+        "cheonjiin_key_w": key_w,
+        "cheonjiin_key_h": key_h,
+        "cheonjiin_key_gap_x": key_gap_x,
+        "cheonjiin_total_w": total_w,
+
+        # 기존 쿼티 문자 4행의 세로 위치를 그대로 재사용한다.
+        "cheonjiin_row_ys": [
+            base_layout["number_y"],
+            base_layout["row1_y"],
+            base_layout["row2_y"],
+            base_layout["row3_y"],
+        ],
+    }
+
+
+CHEONJIIN_LAYOUT = calculate_cheonjiin_layout(
+    SCREEN_W,
+    SCREEN_H
+)
 
 def _create_row_buttons(row, y, layout):
 
@@ -296,6 +374,136 @@ def create_confirm_button(layout=None):
 
     return Button([x, y], "확인", size=[w, h])
 
+def create_cheonjiin_character_buttons(layout=None):
+    """
+    천지인 문자 코어 버튼을 생성한다.
+    None으로 지정된 위치는 빈 슬롯으로 남긴다.
+    """
+
+    layout = layout or CHEONJIIN_LAYOUT
+
+    start_x = layout["cheonjiin_start_x"]
+    key_w = layout["cheonjiin_key_w"]
+    key_h = layout["cheonjiin_key_h"]
+    key_gap_x = layout["cheonjiin_key_gap_x"]
+    row_ys = layout["cheonjiin_row_ys"]
+
+    buttons = []
+
+    for row_index, row in enumerate(
+        CHEONJIIN_CHARACTER_ROWS
+    ):
+        y = row_ys[row_index]
+
+        for column_index, key in enumerate(row):
+            if key is None:
+                continue
+
+            x = (
+                start_x
+                + column_index * (
+                    key_w + key_gap_x
+                )
+            )
+
+            buttons.append(
+                Button(
+                    [x, y],
+                    key,
+                    size=[key_w, key_h]
+                )
+            )
+
+    return buttons
+def create_cheonjiin_function_buttons(layout=None):
+    """
+    천지인 하단 기능키를 생성한다.
+
+    배치 순서:
+    한/영 → 스페이스 → 뒤돌리기
+
+    내부 판정값은 기존 process_key와의 호환을 위해
+    '한/영', ' ', 'Del'을 그대로 사용한다.
+    """
+
+    layout = layout or CHEONJIIN_LAYOUT
+
+    start_x = layout["cheonjiin_start_x"]
+    total_w = layout["cheonjiin_total_w"]
+
+    gap = layout["cheonjiin_key_gap_x"]
+    y = layout["function_row_y"]
+    row_h = layout["function_row_h"]
+
+    usable_w = total_w - 2 * gap
+
+    # 스페이스를 가장 넓게 배치
+    language_w = int(usable_w * 0.23)
+    space_w = int(usable_w * 0.54)
+    delete_w = (
+        usable_w
+        - language_w
+        - space_w
+    )
+
+    language_x = start_x
+    space_x = (
+        language_x
+        + language_w
+        + gap
+    )
+    delete_x = (
+        space_x
+        + space_w
+        + gap
+    )
+
+    return [
+        Button(
+            [language_x, y],
+            "한/영",
+            size=[language_w, row_h],
+            font_role="function_small"
+        ),
+        Button(
+            [space_x, y],
+            " ",
+            size=[space_w, row_h],
+            font_role="function_small"
+        ),
+        Button(
+            [delete_x, y],
+            "Del",
+            size=[delete_w, row_h],
+            font_role="function_small"
+        ),
+    ]
+
+def create_cheonjiin_buttons(layout=None):
+    """
+    천지인 문자키, 하단 기능키, 입력창 오른쪽 확인 버튼을
+    하나의 Button 목록으로 반환한다.
+    """
+
+    layout = layout or CHEONJIIN_LAYOUT
+
+    character_buttons = (
+        create_cheonjiin_character_buttons(layout)
+    )
+
+    function_buttons = (
+        create_cheonjiin_function_buttons(layout)
+    )
+
+    # 확인 버튼은 하단에 넣지 않고
+    # 기존처럼 입력창 오른쪽에 유지한다.
+    confirm_button = create_confirm_button(layout)
+
+    return (
+        character_buttons
+        + function_buttons
+        + [confirm_button]
+    )
 
 def create_buttons(keys):
 
@@ -306,9 +514,22 @@ def create_buttons(keys):
     return character_buttons + function_buttons + [confirm_button]
 
 
-def process_key(key, is_korean, is_shift, buttonList):
-
+def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):
     from src import hangul
+    # 1차 연결 단계:
+    # 천지인 자모키는 화면·타겟 판정만 확인하고,
+    # 실제 연타 및 모음 조합은 다음 단계에서 처리한다.
+    if (
+        keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+        and is_korean
+        and key in CHEONJIIN_CHARACTER_KEYS
+    ):
+        print(f"[천지인] 선택 키: {key}")
+        return (
+            is_korean,
+            is_shift,
+            buttonList
+        )
 
     if key == "확인":
         # 추후 메시지 전송(제출) 기능 연결 예정 — 현재는 placeholder.
@@ -403,9 +624,12 @@ def process_key(key, is_korean, is_shift, buttonList):
             is_korean = True
             is_shift = False
 
-            buttonList = create_buttons(
-                keys_kor_normal
-            )
+            if keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN:
+                buttonList = create_cheonjiin_buttons()
+            else:
+                buttonList = create_buttons(
+                    keys_kor_normal
+                )
 
         elif key == " ":
 

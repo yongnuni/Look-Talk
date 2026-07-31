@@ -49,6 +49,11 @@ key_font = ImageFont.truetype(
     max(18, int(LAYOUT["row_h"] * 0.42))
 )
 
+function_key_font = ImageFont.truetype(
+    FONT_PATH,
+    max(20, int(LAYOUT["row_h"] * 0.30))
+)
+
 
 # ── 카운트다운 ────────────────────────────────────────────────
 
@@ -478,7 +483,18 @@ def drawAll(
 
         label = DISPLAY_LABELS.get(key, key)
 
-        bbox = draw.textbbox((0, 0), label, font=key_font)
+        current_key_font = (
+            function_key_font
+            if getattr(button, "font_role", "default") == "function_small"
+            else key_font
+        )
+
+        bbox = draw.textbbox(
+            (0, 0),
+            label,
+            font=current_key_font
+        )
+
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
 
@@ -488,7 +504,7 @@ def drawAll(
         draw.text(
             (text_x, text_y),
             label,
-            font=key_font,
+            font=current_key_font,
             fill=text_color
         )
 

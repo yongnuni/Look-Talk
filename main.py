@@ -61,8 +61,11 @@ from src.tracking.feature_builder import build_features
 
 from src.keyboard import (
     create_buttons,
+    create_cheonjiin_buttons,
     process_key,
-    keys_kor_normal
+    keys_kor_normal,
+    KEYBOARD_LAYOUT_QWERTY,
+    KEYBOARD_LAYOUT_CHEONJIIN,
 )
 
 from src.ui import (
@@ -507,8 +510,7 @@ def show_session_popup(session_id):
     except Exception as e:
         print(f"[popup] 시각화 실패: {e}")
 
-def main(mode=MODE_CALIBRATED, strategy_name=None):
-
+def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):
     cap = cv2.VideoCapture(0)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -571,7 +573,10 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
     backbone_frame_count = 0
     last_gaze_vec = None
 
-    buttonList = create_buttons(keys_kor_normal)
+    if keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN:
+        buttonList = create_cheonjiin_buttons()
+    else:
+        buttonList = create_buttons(keys_kor_normal)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
@@ -874,7 +879,8 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                         clicked_key,
                         is_korean,
                         is_shift,
-                        buttonList
+                        buttonList,
+                        keyboard_layout
                     )
 
                 # 입벌림 클릭
@@ -886,7 +892,8 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                         hovered_key,
                         is_korean,
                         is_shift,
-                        buttonList
+                        buttonList,
+                        keyboard_layout
                     )
 
                     print("MOUTH INPUT:", hovered_key)
@@ -1414,6 +1421,20 @@ def _parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--keyboard-layout",
+        dest="keyboard_layout",
+        choices=[
+            KEYBOARD_LAYOUT_QWERTY,
+            KEYBOARD_LAYOUT_CHEONJIIN,
+        ],
+        default=KEYBOARD_LAYOUT_QWERTY,
+        help=(
+            "키보드 배열. 'qwerty'는 기존 쿼티 배열이며, "
+            "'cheonjiin'은 천지인 3×4 배열을 사용한다."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -1425,9 +1446,22 @@ def _parse_args():
                 f"사용 가능한 strategy: {available}"
             )
 
-    return args.gaze_mode, args.strategy
+    return (
+        args.gaze_mode,
+        args.strategy,
+        args.keyboard_layout
+    )
 
 
 if __name__ == "__main__":
-    _mode, _strategy_name = _parse_args()
-    main(mode=_mode, strategy_name=_strategy_name)
+    (
+        _mode,
+        _strategy_name,
+        _keyboard_layout
+    ) = _parse_args()
+
+    main(
+        mode=_mode,
+        strategy_name=_strategy_name,
+        keyboard_layout=_keyboard_layout
+    )
