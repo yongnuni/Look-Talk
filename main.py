@@ -16,7 +16,8 @@ import src.hangul as hangul
 from src.config import (
     SCREEN_W,
     SCREEN_H,
-    PX_PER_CM
+    PX_PER_CM,
+    GAZE_AVG_WINDOW,
 )
 
 from src.tracking.eye_tracking import (
@@ -172,6 +173,7 @@ def run_gaze_accuracy_test(
         target_x = int(SCREEN_W * rx)
         target_y = int(SCREEN_H * ry)
 
+        
         collector.start_target(idx, target_x, target_y)
 
         samples_x = []
@@ -469,10 +471,17 @@ def run_gaze_accuracy_test(
     # ── collector 내보내기 ──
     out_dir = "gaze_accuracy_results"
 
-    collector.end_session()
     collector.export_csv(
-        sessions_path=os.path.join(out_dir, f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"),
-        accuracy_path=os.path.join(out_dir, f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv")
+        sessions_path=os.path.join(
+            out_dir,
+            f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
+        ),
+        accuracy_path=os.path.join(
+            out_dir,
+            f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv"
+        ),
+        export_session=False,
+        export_accuracy=True
     )
     print("[metrics] collector CSV 저장 완료:", out_dir)
 
@@ -528,6 +537,7 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
     dwell = DwellController()
     mouth = MouthClickDetector()
     tester = TestRunner()
+    collector = None
     blink_detector = BlinkDetector(
         detect_natural=True,
         detect_intentional=True
@@ -830,6 +840,10 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                         last_gaze_x = gaze_x
                         last_gaze_y = gaze_y
                         tracking_valid = True
+                        tester.update_cursor_position(
+                            gaze_x,
+                            gaze_y
+                        )
 
             # ── 드웰 클릭 ─────────────────────────────────────
 
@@ -894,6 +908,58 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
 
             # 테스트 완료 감지
             if tester.check_complete(current_text):
+                input_metrics = tester.get_input_metrics()
+                print(
+                    "입력 시간:",
+                    f"{input_metrics['input_duration_sec']:.2f} sec"
+                )
+                print(
+                    "커서 이동 거리:",
+                    f"{input_metrics['cursor_travel_distance_px']:.2f} px"
+                )
+                print(
+                    "평균 커서 속도:",
+                    f"{input_metrics['average_cursor_speed_px_sec']:.2f} px/sec"
+                )
+
+                if collector is not None:
+
+                    collector.set_input_metrics(
+                        input_duration_sec=(
+                            input_metrics["input_duration_sec"]
+                        ),
+                        cursor_travel_distance_px=(
+                            input_metrics["cursor_travel_distance_px"]
+                        ),
+                        average_cursor_speed_px_sec=(
+                            input_metrics["average_cursor_speed_px_sec"]
+                        )
+                    )
+                
+
+                    collector.end_session()
+
+                    out_dir = "gaze_accuracy_results"
+
+                    collector.export_csv(
+                        sessions_path=os.path.join(
+                            out_dir,
+                            f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
+                        ),
+                        accuracy_path=os.path.join(
+                            out_dir,
+                            f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv"
+                       
+                        ),
+                        export_session=True,
+                        export_accuracy=False
+                    )
+
+                    print(
+                        "[metrics] 입력 및 세션 지표 저장 완료: "
+                        f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
+                    )
+
                 hangul.finalText = ""
                 hangul.jamo_buffer[:] = ['', '', '']
 
@@ -1257,16 +1323,42 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                     elif use_pose_corrected:
                         version_name = "v0.1-pose-corrected"
                     else:
-                        version_name = "v0.1-raw"
+                        version_name = f"v0.3-raw-mean{GAZE_AVG_WINDOW}"
 
                     collector = MetricsCollector(
                         user_id="yejin",
                         dev_version=version_name,
                         px_per_cm=PX_PER_CM,
-                        calib_id=mapper.calibrator.calib_id,
+
+                        # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
+                        calib_id=(
+                            mapper.calibrator.last_good_calib_id
+                            if mapper.calibrator.calibration_fallback_used
+                            and mapper.calibrator.last_good_calib_id is not None
+                            else mapper.calibrator.calib_id
+                        ),
+
                         calib_reproj_rmse_px=mapper.calibrator.calib_reproj_rmse_px,
                         use_pose_corrected=use_pose_corrected,
                         use_sqpnp_corrected=use_sqpnp_corrected,
+                        gaze_avg_window=GAZE_AVG_WINDOW,
+                        smoothing_mode="moving_average",
+
+                        edge_mean_reproj_error_px=(
+                            calibrator.edge_mean_reproj_error_px
+                        ),
+                        center_mean_reproj_error_px=(
+                            mapper.calibrator.center_mean_reproj_error_px
+                        ),
+                        calibration_fallback_used=(
+                            calibrator.calibration_fallback_used
+                        ),
+                        rejected_calib_rmse_px=(
+                            mapper.calibrator.rejected_calib_rmse_px
+                        ),
+                        applied_calib_rmse_px=(
+                            calibrator.applied_calib_rmse_px
+                        ),
                     )
 
                     run_gaze_accuracy_test(
