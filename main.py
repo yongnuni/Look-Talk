@@ -10,6 +10,7 @@ from src.calibrations.baseline_manager import save_baseline
 from src.tracking.blink import BlinkDetector, BlinkKind
 import src.viz.viz as viz
 import matplotlib.pyplot as plt
+from src.cheonjiin import cheonjiin_composer
 
 import src.hangul as hangul
 
@@ -904,9 +905,19 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
             kbd_bg = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
             kbd_bg[:] = (245, 246, 248)
 
+            pending_cheonjiin_text = ""
+            if (
+                keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+                and is_korean
+            ):
+                pending_cheonjiin_text = (
+                    cheonjiin_composer.get_pending_preview()
+                )
+
             current_text = (
-                hangul.finalText +
-                hangul.compose_jamo_buffer()
+                hangul.finalText
+                + hangul.compose_jamo_buffer()
+                + pending_cheonjiin_text
             )
 
             target = tester.target_text if tester.active else None

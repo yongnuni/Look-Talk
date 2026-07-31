@@ -1,6 +1,8 @@
 import webbrowser
 
 from src.config import SCREEN_W, SCREEN_H
+from src.cheonjiin import cheonjiin_composer
+
 from src.hangul import (
     add_jamo,
     flush_buffer,
@@ -516,20 +518,51 @@ def create_buttons(keys):
 
 def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):
     from src import hangul
-    # 1차 연결 단계:
-    # 천지인 자모키는 화면·타겟 판정만 확인하고,
-    # 실제 연타 및 모음 조합은 다음 단계에서 처리한다.
-    if (
+    is_cheonjiin = (
         keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+    )
+
+    if (
+        is_cheonjiin
         and is_korean
         and key in CHEONJIIN_CHARACTER_KEYS
     ):
-        print(f"[천지인] 선택 키: {key}")
+        emitted_jamo = cheonjiin_composer.input_key(key)
+
+        if emitted_jamo is None:
+            print(
+                f"[천지인] {key} → 모음 조합 대기"
+            )
+        else:
+            print(
+                f"[천지인] {key} → {emitted_jamo}"
+            )
+
         return (
             is_korean,
             is_shift,
             buttonList
         )
+    # 아직 화면에 나타나지 않은 ㆍ 입력은
+    # 되돌리기를 한 번 눌러 취소할 수 있다.
+    if (
+        is_cheonjiin
+        and is_korean
+        and key == "Del"
+        and cheonjiin_composer.cancel_uncommitted_vowel()
+        ):
+        print("[천지인] 미완성 모음 입력 취소")
+
+        return (
+            is_korean,
+            is_shift,
+            buttonList
+            )
+
+    # 스페이스, 한/영, 확인, 되돌리기 등 기능키를 선택하면
+    # 자음 연타 및 모음 요소 입력 상태를 종료한다.
+    if is_cheonjiin:
+        cheonjiin_composer.reset()
 
     if key == "확인":
         # 추후 메시지 전송(제출) 기능 연결 예정 — 현재는 placeholder.
