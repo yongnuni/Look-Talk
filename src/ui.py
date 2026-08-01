@@ -19,6 +19,7 @@ from src.config import (
     COUNTDOWN_SEC,
     CALIB_POINTS
 )
+from src.keyboard import LAYOUT, DISPLAY_LABELS
 from src.tracking.mouth import draw_mouth
 from src.tracking.eye_tracking import (
     LEFT_EYE,
@@ -40,6 +41,12 @@ font = ImageFont.truetype(
 small_font = ImageFont.truetype(
     FONT_PATH,
     20
+)
+
+# 키캡 텍스트는 최종 확정된 row_h에 비례해 크기를 맞춘다(해상도별 자동 조정).
+key_font = ImageFont.truetype(
+    FONT_PATH,
+    max(18, int(LAYOUT["row_h"] * 0.42))
 )
 
 
@@ -370,6 +377,17 @@ def draw_calib_screen(
 
 # ── 키보드 그리기 ─────────────────────────────────────────────
 
+IDLE_BG = (235, 236, 240)
+IDLE_BORDER = (205, 206, 210)
+HOVER_BG = (219, 234, 254)
+HOVER_BORDER = (147, 197, 253)
+DWELL_BG_END = (37, 99, 235)
+DWELL_BORDER_END = (29, 78, 216)
+PROGRESS_BAR_COLOR = (34, 197, 94)
+KEY_TEXT_COLOR = (30, 41, 59)
+KEY_TEXT_COLOR_DWELL = (255, 255, 255)
+
+
 def drawAll(
     img,
     buttonList,
@@ -396,37 +414,43 @@ def drawAll(
             y < gaze_y < y+h
         )
 
+        text_color = KEY_TEXT_COLOR
+
         if on_key and dwell_key == key:
 
-            r = int(
-                255 * dwell_ratio
+            t = dwell_ratio
+
+            bg_color = tuple(
+                int(HOVER_BG[i] + (DWELL_BG_END[i] - HOVER_BG[i]) * t)
+                for i in range(3)
             )
 
-            bg_color = (
-                r,
-                100,
-                200
+            border_color = tuple(
+                int(HOVER_BORDER[i] + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * t)
+                for i in range(3)
             )
+
+            if t > 0.5:
+                text_color = KEY_TEXT_COLOR_DWELL
 
         elif on_key:
 
-            bg_color = (
-                100,
-                100,
-                200
-            )
+            bg_color = HOVER_BG
+            border_color = HOVER_BORDER
 
         else:
 
-            bg_color = (
-                80,
-                80,
-                80
-            )
+            bg_color = IDLE_BG
+            border_color = IDLE_BORDER
 
-        draw.rectangle(
+        radius = int(min(w, h) * 0.18)
+
+        draw.rounded_rectangle(
             [x, y, x+w, y+h],
-            fill=bg_color
+            radius=radius,
+            fill=bg_color,
+            outline=border_color,
+            width=2
         )
 
         if (
@@ -441,21 +465,31 @@ def drawAll(
                 w * dwell_ratio
             )
 
-            draw.rectangle(
+            draw.rounded_rectangle(
                 [
                     x,
                     y+h-6,
                     x+bar_w,
                     y+h
                 ],
-                fill=(0,255,180)
+                radius=3,
+                fill=PROGRESS_BAR_COLOR
             )
 
+        label = DISPLAY_LABELS.get(key, key)
+
+        bbox = draw.textbbox((0, 0), label, font=key_font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+
+        text_x = x + (w - text_w) // 2 - bbox[0]
+        text_y = y + (h - text_h) // 2 - bbox[1]
+
         draw.text(
-            (x+10, y+15),
-            key,
-            font=font,
-            fill=(255,255,255)
+            (text_x, text_y),
+            label,
+            font=key_font,
+            fill=text_color
         )
 
     return np.array(img_pil)
@@ -605,28 +639,49 @@ def draw_test_complete_overlay(img):
  
  
 def draw_text_area(img, current_text, target_text=None):
-    """상단 텍스트 입력 영역 렌더링."""
- 
-    cv2.rectangle(img, (40, 80), (SCREEN_W - 40, 160), (0, 0, 0), -1)
- 
+    """
+    상단 입력 문장 영역 렌더링.
+
+    src.keyboard.LAYOUT["input_rect"]를 그대로 사용한다 — 이 값은
+    확인 버튼(confirm_rect) 폭만큼 이미 오른쪽 공간을 제외하고 계산되어 있다.
+    """
+
+    x, y, w, h = LAYOUT["input_rect"]
+
     img_pil = Image.fromarray(img)
     draw = ImageDraw.Draw(img_pil)
- 
+
+    radius = int(h * 0.22)
+
+    draw.rounded_rectangle(
+        [x, y, x + w, y + h],
+        radius=radius,
+        fill=(255, 255, 255),
+        outline=(210, 213, 219),
+        width=2
+    )
+
+    text_x = x + int(h * 0.35)
+
     if target_text is not None:
         draw.text(
-            (55, 12),
-            f"입력 문장 : {target_text}",
-            font=font,
-            fill=(0, 255, 0)
+            (x, max(0, y - 26)),
+            f"목표 문장 : {target_text}",
+            font=small_font,
+            fill=(22, 163, 74)
         )
- 
+
+    bbox = draw.textbbox((0, 0), current_text, font=font)
+    text_h = bbox[3] - bbox[1]
+    text_y = y + (h - text_h) // 2 - bbox[1]
+
     draw.text(
-        (55, 90),
+        (text_x, text_y),
         current_text,
         font=font,
-        fill=(255, 255, 255)
+        fill=(30, 41, 59)
     )
- 
+
     return np.array(img_pil)
 
 # 캘리브레이션 가이드 안내 문구

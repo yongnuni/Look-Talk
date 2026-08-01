@@ -167,9 +167,14 @@ class PolyRidgeMapper:
 
 class Calibrator:
 
-    CALIB_SCHEMA_VERSION = "1.1"
+    CALIB_SCHEMA_VERSION = "1.3"
 
     def __init__(self):
+        # 마지막으로 품질 기준을 통과한 Homography 보관
+        # reset()을 실행해도 유지되어야 함
+        self.last_good_H = None
+        self.last_good_calib_rmse_px = None
+        self.last_good_calib_id = None
         self.reset()
 
     def reset(self):
@@ -193,9 +198,15 @@ class Calibrator:
         self.pose_pts = []
 
         self.point_records = []
+        self.point_retry_counts = {}
         self.calib_id = str(uuid.uuid4())
         self.calib_reproj_rmse_px = None
         self.ridge_reproj_rmse_px = None
+        self.calibration_fallback_used = False
+        self.rejected_calib_rmse_px = None
+        self.edge_mean_reproj_error_px = None
+        self.center_mean_reproj_error_px = None
+        self.applied_calib_rmse_px = None
 
         self.pose_baseline = None
 
@@ -306,6 +317,7 @@ class Calibrator:
                 ) if self.samples else 0.5
 
             # 시선 흔들림 검사
+            # 1. 수집된 원본 좌표 분리
             xs_raw = [
                 s[0]
                 for s in self.samples
@@ -315,22 +327,63 @@ class Calibrator:
                 s[1]
                 for s in self.samples
             ]
-
+            # 2. 표준편차 계산
             std_x = np.std(xs_raw) if xs_raw else 0.0
             std_y = np.std(ys_raw) if ys_raw else 0.0
 
-            if (
+            sample_count = len(self.samples)
+
+            if sample_count > 5:
+                trimmed_count = max(0, hi - lo)
+            else:
+                trimmed_count = sample_count
+
+            removed_count = sample_count - trimmed_count
+
+            print(
+                f"[calibration point {self.idx}] "
+                f"samples={sample_count}, "
+                f"used={trimmed_count}, "
+                f"removed={removed_count}, "
+                f"std_x={std_x:.6f}, "
+                f"std_y={std_y:.6f}, "
+                f"median=({avg_x:.6f}, {avg_y:.6f})"
+            )
+            # 3. 불안정 여부 검사
+            is_unstable = (
                 std_x > CALIB_STD_X
                 or std_y > CALIB_STD_Y
-            ):
+            )
 
-                self.warning = "시선이 불안정합니다"
+            retry_count = self.point_retry_counts.get(
+                self.idx,
+                0
+            )
+
+            if is_unstable and retry_count < 1:
+
+                self.point_retry_counts[self.idx] = (
+                    retry_count + 1
+                )
+
+                self.warning = (
+                    "시선이 불안정합니다. "
+                    "한 번 더 측정합니다."
+                )
                 self.warning_start = time.time()
+
+                print(
+                    f"[calibration point {self.idx}] "
+                    f"unstable: "
+                    f"std_x={std_x:.6f}, "
+                    f"std_y={std_y:.6f} "
+                    f"-> retry 1"
+                )
 
                 self.samples = []
                 self.pose_samples = []
                 self.sample_confs = []
-                self.feature_samples = []   # 릿지 샘플도 같이 폐기 (불안정 구간 오염 방지)
+                self.feature_samples = []
                 self.hold_start = None
 
                 return elapsed / (
@@ -338,7 +391,21 @@ class Calibrator:
                     CALIB_COLLECT_SEC
                 )
 
-            self.warning = ""
+            if is_unstable:
+                print(
+                    f"[calibration point {self.idx}] "
+                    f"still unstable after retry; "
+                    f"accepted with warning"
+                )
+
+                self.warning = (
+                    "시선이 다소 불안정하지만 "
+                    "현재 측정값을 사용합니다."
+                )
+                self.warning_start = time.time()
+
+            else:
+                self.warning = ""
 
             self.iris_pts.append(
                 [
@@ -373,35 +440,18 @@ class Calibrator:
                     self.ridge_X.append(f)
                     self.ridge_Y.append(target_px)
 
-            xs_raw = [s[0] for s in self.samples]
-            ys_raw = [s[1] for s in self.samples]
-
-            std_x = np.std(xs_raw)
-            std_y = np.std(ys_raw)
-
-            if (
-                std_x > CALIB_STD_X
-                or std_y > CALIB_STD_Y
-            ):
-
-                self.warning = "시선이 불안정합니다"
-                self.warning_start = time.time()
-
-                self.samples = []
-                self.sample_confs = []
-                self.hold_start = None
-
-                return elapsed / (
-                    CALIB_STABILIZE_SEC +
-                    CALIB_COLLECT_SEC
-                )
-
-            self.warning = ""
+            
 
             mean_confidence = (
                 float(np.mean(self.sample_confs))
                 if self.sample_confs
                 else None
+            )
+            is_edge_point = (
+                sx <= 0.2
+                or sx >= 0.8
+                or sy <= 0.2
+                or sy >= 0.8
             )
 
             self.point_records.append(
@@ -409,13 +459,26 @@ class Calibrator:
                     "calib_point_index": self.idx,
                     "point_x_norm": sx,
                     "point_y_norm": sy,
+                    "region": (
+                        "edge"
+                        if is_edge_point
+                        else "center"
+                    ),
                     "reproj_error_px": None,
                     "ridge_reproj_error_px": None,
                     "iris_std_x_px": float(std_x),
                     "iris_std_y_px": float(std_y),
                     "sample_count": len(self.samples),
+                    "used_sample_count": trimmed_count,
+                    "removed_sample_count": removed_count,
+                    "calibration_retry_count": (
+                        self.point_retry_counts.get(
+                            self.idx,
+                            0
+                        )
+                    ),
                     "feature_sample_count": len(self.feature_samples),
-                    "mean_confidence": mean_confidence,
+                    "mean_confidence": mean_confidence, 
                 }
             )
 
@@ -467,6 +530,26 @@ class Calibrator:
                             )
                         )
 
+                        point_x_norm = rec["point_x_norm"]
+                        point_y_norm = rec["point_y_norm"]
+
+                        is_edge = (
+                            point_x_norm <= 0.2
+                            or point_x_norm >= 0.8
+                            or point_y_norm <= 0.2
+                            or point_y_norm >= 0.8
+                        )
+
+                        region = "edge" if is_edge else "center"
+
+                        print(
+                            f"[calibration reproj {i}] "
+                            f"region={region}, "
+                            f"target=({target_x:.1f}, {target_y:.1f}), "
+                            f"mapped=({pred_x:.1f}, {pred_y:.1f}), "
+                            f"error={rec['reproj_error_px']:.1f}px"
+                        )
+
                     # STB-11 세션 요약: 16점 재투영 오차의 RMSE
                     self.calib_reproj_rmse_px = float(
                         np.sqrt(
@@ -475,6 +558,169 @@ class Calibrator:
                             )
                         )
                     )
+                    edge_errors = []
+                    center_errors = []
+
+                    for rec in self.point_records:
+                        error = rec["reproj_error_px"]
+
+                        if error is None:
+                            continue
+
+                        is_edge = (
+                            rec["point_x_norm"] <= 0.2
+                            or rec["point_x_norm"] >= 0.8
+                            or rec["point_y_norm"] <= 0.2
+                            or rec["point_y_norm"] >= 0.8
+                        )
+
+                        if is_edge:
+                            edge_errors.append(error)
+                        else:
+                            center_errors.append(error)
+
+                    edge_mean_error = (
+                        float(np.mean(edge_errors))
+                        if edge_errors
+                        else None
+                    )
+
+                    center_mean_error = (
+                        float(np.mean(center_errors))
+                        if center_errors
+                        else None
+                    )
+                    self.edge_mean_reproj_error_px = edge_mean_error
+                    self.center_mean_reproj_error_px = center_mean_error
+
+                    edge_text = (
+                        f"{edge_mean_error:.1f}px"
+                        if edge_mean_error is not None
+                        else "N/A"
+                    )
+
+                    center_text = (
+                        f"{center_mean_error:.1f}px"
+                        if center_mean_error is not None
+                        else "N/A"
+                    )
+
+                print(
+                    "[calibration region error] "
+                    f"edge_mean={edge_text}, "
+                    f"center_mean={center_text}"
+                )
+               # 캘리브레이션 품질 검사
+               # 캘리브레이션 품질 기준
+                max_calib_rmse_px = 150.0
+
+                calibration_valid = (
+                    self.H is not None
+                    and self.calib_reproj_rmse_px is not None
+                    and self.calib_reproj_rmse_px <= max_calib_rmse_px
+                )
+
+                if calibration_valid:
+
+                    self.calibration_fallback_used = False
+                    self.rejected_calib_rmse_px = None
+                    self.applied_calib_rmse_px = self.calib_reproj_rmse_px
+
+                    # 새 캘리브레이션 결과가 정상이면 백업 갱신
+                    self.last_good_H = self.H.copy()
+                    self.last_good_calib_rmse_px = (
+                        self.calib_reproj_rmse_px
+                    )
+                    self.last_good_calib_id = self.calib_id
+
+                    print(
+                        "[calibration] 새 캘리브레이션 적용: "
+                        f"homography RMSE "
+                        f"{self.calib_reproj_rmse_px:.1f}px"
+                    )
+
+                else:
+
+                    rmse_text = (
+                        f"{self.calib_reproj_rmse_px:.1f}px"
+                        if self.calib_reproj_rmse_px is not None
+                        else "계산 불가"
+                    )
+
+                    # 이전 정상 결과가 있으면 새 불량 결과 대신 복구
+                    if self.last_good_H is not None:
+
+                        rejected_calib_id = self.calib_id
+                        rejected_rmse = self.calib_reproj_rmse_px
+
+                        self.calibration_fallback_used = True
+                        self.rejected_calib_rmse_px = rejected_rmse
+                        self.applied_calib_rmse_px = (
+                            self.last_good_calib_rmse_px
+                        )
+
+                        self.H = self.last_good_H.copy()
+                        self.calib_reproj_rmse_px = (
+                            self.last_good_calib_rmse_px
+                        )
+
+                        print(
+                            "[calibration warning] "
+                            f"새 캘리브레이션 품질 불량: "
+                            f"RMSE {rmse_text}"
+                        )
+                        print(
+                            "[calibration fallback] "
+                            "마지막 정상 Homography를 계속 사용합니다."
+                        )
+                        print(
+                            "[calibration fallback] "
+                            f"rejected_calib_id={rejected_calib_id}, "
+                            f"restored_calib_id="
+                            f"{self.last_good_calib_id}"
+                        )
+
+                    # 이전 정상 결과가 없는 첫 실행
+                    elif self.H is not None:
+                        self.calibration_fallback_used = False
+                        self.rejected_calib_rmse_px = None
+                        self.applied_calib_rmse_px = (
+                            self.calib_reproj_rmse_px
+                        )
+
+                        print(
+                            "[calibration warning] "
+                            f"첫 캘리브레이션 RMSE가 높습니다: "
+                            f"{rmse_text}"
+                        )
+                        print(
+                            "[calibration warning] "
+                            "이전 정상 결과가 없어 현재 결과를 "
+                            "임시로 사용합니다."
+                        )
+                        print(
+                            "[calibration warning] "
+                            "커서 상태가 좋지 않으면 r 키로 "
+                            "다시 캘리브레이션하세요."
+                        )
+
+                    # Homography 계산 자체가 실패했고 백업도 없는 경우
+                    else:
+
+                        print(
+                            "[calibration] "
+                            "Homography 계산에 실패했고 "
+                            "이전 정상 결과도 없습니다."
+                        )
+                        print(
+                            "[calibration] "
+                            "캘리브레이션을 다시 시작합니다."
+                        )
+
+                        self.reset()
+                        return 0.0
+
+               
 
                 # ── 릿지 회귀 학습 (홈그래피와 병렬, 서로 독립) ──
                 self._fit_ridge()
@@ -890,11 +1136,15 @@ class Calibrator:
             "calib_point_index",
             "point_x_norm",
             "point_y_norm",
+            "region",
             "reproj_error_px",
             "ridge_reproj_error_px",
-            "iris_std_x_px",
-            "iris_std_y_px",
+            "iris_std_x_norm",
+            "iris_std_y_norm",
             "sample_count",
+            "used_sample_count",
+            "removed_sample_count",
+            "calibration_retry_count",
             "feature_sample_count",
             "mean_confidence",
             "schema_version",
@@ -906,6 +1156,7 @@ class Calibrator:
                 "calib_point_index": rec["calib_point_index"],
                 "point_x_norm": rec["point_x_norm"],
                 "point_y_norm": rec["point_y_norm"],
+                "region": rec.get("region"),
                 "reproj_error_px": (
                     round(rec["reproj_error_px"], 2)
                     if rec["reproj_error_px"] is not None
@@ -916,9 +1167,21 @@ class Calibrator:
                     if rec.get("ridge_reproj_error_px") is not None
                     else None
                 ),
-                "iris_std_x_px": round(rec["iris_std_x_px"], 5),
-                "iris_std_y_px": round(rec["iris_std_y_px"], 5),
+                "iris_std_x_norm": round(rec["iris_std_x_px"], 5),
+                "iris_std_y_norm": round(rec["iris_std_y_px"], 5),
                 "sample_count": rec["sample_count"],
+                "used_sample_count": rec.get(
+                    "used_sample_count",
+                    rec["sample_count"]
+                ),
+                "removed_sample_count": rec.get(
+                    "removed_sample_count",
+                    0
+                ),
+                "calibration_retry_count": rec.get(
+                    "calibration_retry_count",
+                    0
+                ),
                 "feature_sample_count": rec.get("feature_sample_count", 0),
                 "mean_confidence": (
                     round(rec["mean_confidence"], 4)

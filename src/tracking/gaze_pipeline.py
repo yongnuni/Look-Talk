@@ -1,11 +1,15 @@
 import cv2
 import numpy as np
+from collections import deque
+
 
 from src.config import (
+    GAZE_AVG_WINDOW,
     SMOOTH_ALPHA,
     FIXATION_RADIUS,
     FIXATION_FRAMES
 )
+
 
 
 class GazePipeline:
@@ -14,6 +18,11 @@ class GazePipeline:
         self.fixation_center = None
         self.fixation_count = 0
         self.last_output = None
+
+        # 최근 화면 좌표를 저장하는 이동평균 버퍼
+        self.gaze_buffer = deque(
+            maxlen=GAZE_AVG_WINDOW
+        )
 
         self.kalman = cv2.KalmanFilter(4, 2)
 
@@ -49,6 +58,7 @@ class GazePipeline:
         self.fixation_center = None
         self.fixation_count = 0
         self.last_output = None
+        self.gaze_buffer.clear()
 
         self.kalman.statePost = np.zeros(
             (4, 1),
@@ -64,6 +74,7 @@ class GazePipeline:
         self.fixation_center = None
         self.fixation_count = 0
         self.last_output = None
+        self.gaze_buffer.clear()
         self.initialized = False
 
     def _is_head_pose_valid(self, head_pose):
@@ -122,7 +133,27 @@ class GazePipeline:
         #if not self._is_head_pose_valid(head_pose):
         #    self._reset_tracking_state()
         #    return -1, -1, 0
+        # 최근 화면 좌표를 버퍼에 저장
+        self.gaze_buffer.append(
+            (
+                float(sx),
+                float(sy)
+            )
+        )
 
+        # 현재까지 저장된 좌표들의 평균을 Kalman 입력으로 사용
+        buffer_array = np.asarray(
+            self.gaze_buffer,
+            dtype=np.float32
+        )
+
+        sx = float(
+            np.mean(buffer_array[:, 0])
+        )
+
+        sy = float(
+            np.mean(buffer_array[:, 1])
+        )
         # Kalman Filter
         if not self.initialized:
 
@@ -156,56 +187,54 @@ class GazePipeline:
         alpha = 0.35
 
         if self.last_output is None:
-
+        # 첫 유효 좌표는 비교할 이전 좌표가 없으므로 그대로 사용
+            sx_s = float(sx_s)
+            sy_s = float(sy_s)
             self.last_output = [sx_s, sy_s]
 
         else:
+        # Dead Zone 계산 전에 이전 최종 출력 좌표 보존
+            prev_x, prev_y = self.last_output
 
-            sx_s = (
-                alpha * sx_s
-                + (1-alpha) * self.last_output[0]
-            )
+        # Kalman 결과에 EMA 적용
+            ema_x = (alpha * sx_s + (1 - alpha) * prev_x)
+            ema_y = (alpha * sy_s + (1 - alpha) * prev_y)
 
-            sy_s = (
-                alpha * sy_s
-                + (1-alpha) * self.last_output[1]
-            )
+        # 이전 최종 좌표와 새로운 EMA 좌표 사이의 실제 거리
+            movement = np.hypot(ema_x - prev_x,ema_y - prev_y)
 
-            self.last_output = [sx_s, sy_s]
+            # 이동량에 따라 Dead Zone 크기 결정
+            if movement < 10:
+                dead_zone = 10
+            elif movement < 40:
+                dead_zone = 15
+            else:
+                dead_zone = 25
 
-        if self.last_output is None:
-            self.last_output = [sx_s, sy_s]
+            if movement < dead_zone:
+            # 작은 흔들림은 무시
+                sx_s = prev_x
+                sy_s = prev_y
+            else:
+            # 한 프레임에 이동할 수 있는 최대 거리 제한
+                dx = ema_x - prev_x
+                dy = ema_y - prev_y
 
-        velocity = np.hypot(
+                step_distance = np.hypot(dx, dy)
 
-            sx_s-self.last_output[0],
+                max_step_px = 50.0
 
-            sy_s-self.last_output[1]
+                if step_distance > max_step_px:
+                    scale = max_step_px / step_distance
 
-        )
+                    sx_s = prev_x + dx * scale
+                    sy_s = prev_y + dy * scale
 
-        if velocity < 10:
+                else:
+                    sx_s = ema_x
+                    sy_s = ema_y
 
-            dead_zone = 5
-
-        elif velocity < 40:
-
-            dead_zone = 10
-
-        else:
-
-            dead_zone = 20
-
-        dist = np.hypot(
-            sx_s - self.last_output[0],
-            sy_s - self.last_output[1]
-        )
-
-        if dist < dead_zone:
-            sx_s = self.last_output[0]
-            sy_s = self.last_output[1]
-        else:
-            self.last_output = [sx_s, sy_s]
+                self.last_output = [sx_s, sy_s]
 
         # Fixation 감지
         if self.fixation_center is None:
