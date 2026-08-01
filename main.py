@@ -990,51 +990,51 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
             # ── 드웰 클릭 ─────────────────────────────────────
 
-                if tracking_valid:
-                    hovered_key, dwell_ratio, clicked_key = dwell.update(
-                        gaze_x,
-                        gaze_y,
-                        buttonList
-                    )
+            if tracking_valid:
+                hovered_key, dwell_ratio, clicked_key = dwell.update(
+                    gaze_x,
+                    gaze_y,
+                    buttonList
+                )
 
-                    mouth_click, mar = mouth.update(
-                        lms,
-                        hovered_key
-                    )
-                else:
-                    dwell.reset()
-                    hovered_key = None
-                    clicked_key = None
-                    dwell_ratio = 0.0
-                    mouth_click = False
-                    mar = 0.0
+                mouth_click, mar = mouth.update(
+                    lms,
+                    hovered_key
+                )
+            else:
+                dwell.reset()
+                hovered_key = None
+                clicked_key = None
+                dwell_ratio = 0.0
+                mouth_click = False
+                mar = 0.0
 
-                # 기존 드웰 클릭
-                if clicked_key:
-                    tester.on_key_press(clicked_key)
+            # 기존 드웰 클릭
+            if clicked_key:
+                tester.on_key_press(clicked_key)
 
-                    (is_korean, is_shift, buttonList) = process_key(
-                        clicked_key,
-                        is_korean,
-                        is_shift,
-                        buttonList,
-                        keyboard_layout
-                    )
+                (is_korean, is_shift, buttonList) = process_key(
+                    clicked_key,
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    keyboard_layout
+                )
 
-                # 입벌림 클릭
-                if mouth_click and hovered_key:
+            # 입벌림 클릭
+            if mouth_click and hovered_key:
 
-                    tester.on_key_press(hovered_key)
+                tester.on_key_press(hovered_key)
 
-                    (is_korean, is_shift, buttonList) = process_key(
-                        hovered_key,
-                        is_korean,
-                        is_shift,
-                        buttonList,
-                        keyboard_layout
-                    )
+                (is_korean, is_shift, buttonList) = process_key(
+                    hovered_key,
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    keyboard_layout
+                )
 
-                    print("MOUTH INPUT:", hovered_key)
+                print("MOUTH INPUT:", hovered_key)
                     
 
             # ── 렌더링 ────────────────────────────────────────
