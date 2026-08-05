@@ -20,11 +20,25 @@ from src.metrics.csv_export import append_rows
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.3"
+    SCHEMA_VERSION = "1.5"
 
-    def __init__(self, user_id="anonymous", dev_version="v0.1-raw", px_per_cm=None,
-                 calib_id=None, calib_reproj_rmse_px=None,
-                 use_pose_corrected=False, use_sqpnp_corrected=False):
+    def __init__(
+            self,
+            user_id="anonymous",
+            dev_version="v0.1-raw",
+            px_per_cm=None,
+            calib_id=None,
+            calib_reproj_rmse_px=None,
+            use_pose_corrected=False,
+            use_sqpnp_corrected=False,
+            gaze_avg_window=None,
+            smoothing_mode=None,
+            edge_mean_reproj_error_px=None,
+            center_mean_reproj_error_px=None,
+            calibration_fallback_used=False,
+            rejected_calib_rmse_px=None,
+            applied_calib_rmse_px=None,
+    ):
     # 세션 단위 메타데이터 (sessions.csv 한 행)
         self.session_id = str(uuid.uuid4())
         self.user_id = user_id
@@ -32,6 +46,18 @@ class MetricsCollector:
         self.px_per_cm = px_per_cm
         self.calib_id = calib_id
         self.calib_reproj_rmse_px = calib_reproj_rmse_px
+        self.gaze_avg_window = gaze_avg_window
+        self.smoothing_mode = smoothing_mode
+        self.edge_mean_reproj_error_px = edge_mean_reproj_error_px
+        self.center_mean_reproj_error_px = center_mean_reproj_error_px
+
+        self.calibration_fallback_used = calibration_fallback_used
+        self.rejected_calib_rmse_px = rejected_calib_rmse_px
+        self.applied_calib_rmse_px = applied_calib_rmse_px
+
+        self.input_duration_sec = None
+        self.cursor_travel_distance_px = None
+        self.average_cursor_speed_px_sec = None
 
         if use_sqpnp_corrected:
             self.correction_mode = "sqpnp_corrected"
@@ -191,57 +217,157 @@ class MetricsCollector:
 
     # ── 세션 종료 / 내보내기 ───────────────────────────────
 
+    def set_input_metrics(
+        self,
+        input_duration_sec,
+        cursor_travel_distance_px,
+        average_cursor_speed_px_sec
+    ):
+        self.input_duration_sec = input_duration_sec
+        self.cursor_travel_distance_px = cursor_travel_distance_px
+        self.average_cursor_speed_px_sec = average_cursor_speed_px_sec
+
     def end_session(self):
         self.end_timestamp = datetime.now(timezone.utc).isoformat()
 
-    def export_csv(self, sessions_path=None, accuracy_path=None):
+    def export_csv(
+        self,
+        sessions_path=None,
+        accuracy_path=None,
+        export_session=True,
+        export_accuracy=True
+    ):
         if sessions_path is None:
             sessions_path = f"sessions_v{self.SCHEMA_VERSION}.csv"
+
         if accuracy_path is None:
             accuracy_path = f"gaze_accuracy_v{self.SCHEMA_VERSION}.csv"
 
-        if self.end_timestamp is None:
-            self.end_session()
+        if export_session:
 
-        session_fields = [
-            "session_id", "user_id", "dev_version",
-            "start_timestamp", "end_timestamp",
-            "session_duration_total_ms", "px_per_cm",
-            "calib_id", "calib_reproj_rmse_px", "correction_mode", "schema_version",
-        ]
-        session_row = {
-            "session_id": self.session_id,
-            "user_id": self.user_id,
-            "dev_version": self.dev_version,
-            "start_timestamp": self.start_timestamp,
-            "end_timestamp": self.end_timestamp,
-            "session_duration_total_ms": self._compute_duration_ms(),
-            "px_per_cm": round(self.px_per_cm, 3) if self.px_per_cm else None,
-            "calib_id": self.calib_id,
-            "calib_reproj_rmse_px": (
-                round(self.calib_reproj_rmse_px, 2)
-                if self.calib_reproj_rmse_px is not None
-                else None
-            ),
-            "correction_mode": self.correction_mode,
-            "schema_version": self.SCHEMA_VERSION,
-        }
-        self._append_rows(sessions_path, session_fields, [session_row])
+            if self.end_timestamp is None:
+                self.end_session()
 
-        accuracy_fields = [
-            "session_id", "target_index",
-            "target_x_px", "target_y_px",
-            "pred_x_px", "pred_y_px",
-            "euclidean_error_px", "euclidean_error_cm",
-            "gaze_std_x_px", "gaze_std_y_px",
-            "iris_std_x_px", "iris_std_y_px",
-            "dropout_rate",
-            "stb01_fps", "stb02_landmark_rate",
-            "stb03_face_fail_rate", "stb04_dropout_rate",
-            "sample_count",
-        ]
-        self._append_rows(accuracy_path, accuracy_fields, self.target_rows)
+            session_fields = [
+                "session_id",
+                "user_id",
+                "dev_version",
+                "start_timestamp",
+                "end_timestamp",
+                "session_duration_total_ms",
+                "px_per_cm",
+                "calib_id",
+                "calib_reproj_rmse_px",
+                "correction_mode",
+                "gaze_avg_window",
+                "smoothing_mode",
+                "input_duration_sec",
+                "cursor_travel_distance_px",
+                "average_cursor_speed_px_sec",
+                "edge_mean_reproj_error_px",
+                "center_mean_reproj_error_px",
+                "calibration_fallback_used",
+                "rejected_calib_rmse_px",
+                "applied_calib_rmse_px",
+                "schema_version",
+            ]
 
+            session_row = {
+                "session_id": self.session_id,
+                "user_id": self.user_id,
+                "dev_version": self.dev_version,
+                "start_timestamp": self.start_timestamp,
+                "end_timestamp": self.end_timestamp,
+                "session_duration_total_ms": self._compute_duration_ms(),
+                "px_per_cm": (
+                    round(self.px_per_cm, 3)
+                    if self.px_per_cm
+                    else None
+                ),
+                "calib_id": self.calib_id,
+                "calib_reproj_rmse_px": (
+                    round(self.calib_reproj_rmse_px, 2)
+                    if self.calib_reproj_rmse_px is not None
+                    else None
+                ),
+                "correction_mode": self.correction_mode,
+                "gaze_avg_window": self.gaze_avg_window,
+                "smoothing_mode": self.smoothing_mode,
+                "input_duration_sec": (
+                    round(self.input_duration_sec, 2)
+                    if self.input_duration_sec is not None
+                    else None
+                ),
+                "cursor_travel_distance_px": (
+                    round(self.cursor_travel_distance_px, 2)
+                    if self.cursor_travel_distance_px is not None
+                    else None
+                ),
+                "average_cursor_speed_px_sec": (
+                    round(self.average_cursor_speed_px_sec, 2)
+                    if self.average_cursor_speed_px_sec is not None
+                    else None
+                ),
+                "edge_mean_reproj_error_px": (
+                    round(self.edge_mean_reproj_error_px, 2)
+                    if self.edge_mean_reproj_error_px is not None
+                    else None
+                ),
+                "center_mean_reproj_error_px": (
+                    round(self.center_mean_reproj_error_px, 2)
+                    if self.center_mean_reproj_error_px is not None
+                    else None
+                ),
+                "calibration_fallback_used": (
+                    self.calibration_fallback_used
+                ),
+                "rejected_calib_rmse_px": (
+                    round(self.rejected_calib_rmse_px, 2)
+                    if self.rejected_calib_rmse_px is not None
+                    else None
+                ),
+                "applied_calib_rmse_px": (
+                    round(self.applied_calib_rmse_px, 2)
+                    if self.applied_calib_rmse_px is not None
+                    else None
+                ),
+                "schema_version": self.SCHEMA_VERSION,
+            }
+
+            self._append_rows(
+                sessions_path,
+                session_fields,
+                [session_row]
+            )
+
+        if export_accuracy:
+
+            accuracy_fields = [
+                "session_id",
+                "target_index",
+                "target_x_px",
+                "target_y_px",
+                "pred_x_px",
+                "pred_y_px",
+                "euclidean_error_px",
+                "euclidean_error_cm",
+                "gaze_std_x_px",
+                "gaze_std_y_px",
+                "iris_std_x_px",
+                "iris_std_y_px",
+                "dropout_rate",
+                "stb01_fps",
+                "stb02_landmark_rate",
+                "stb03_face_fail_rate",
+                "stb04_dropout_rate",
+                "sample_count",
+            ]
+
+            self._append_rows(
+                accuracy_path,
+                accuracy_fields,
+                self.target_rows
+            )
     # ── 내부 헬퍼 ──────────────────────────────────────────
 
     def _compute_duration_ms(self):
