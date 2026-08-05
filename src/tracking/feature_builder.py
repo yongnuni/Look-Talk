@@ -21,6 +21,15 @@ FEATURE_NAMES = [
     "face_center_x",   # 7: 얼굴 중심 (0~1) → 화면 내 평행이동 보상용
     "face_center_y",   # 8
     "face_scale_norm", # 9: 눈 사이 거리 / 프레임 폭 → 거리(스케일) 보상용
+    "left_eye_x",
+    "left_eye_y",
+    "right_eye_x",
+    "right_eye_y",
+
+    "left_rel_x",
+    "left_rel_y",
+    "right_rel_x",
+    "right_rel_y"
 ]
 
 FEATURE_DIM = len(FEATURE_NAMES)
@@ -29,6 +38,7 @@ FEATURE_DIM = len(FEATURE_NAMES)
 def build_features(
     iris_x,
     iris_y,
+    landmarks,
     head_pose,
     gaze_vec=None,
     frame_width=640
@@ -60,18 +70,83 @@ def build_features(
     face_scale = head_pose.get("face_scale", 0.0)
     face_scale_norm = face_scale / max(frame_width, 1)
 
+    lm = landmarks.landmark
+
+    left_eye_x = (lm[33].x + lm[133].x)/2
+    left_eye_y = (lm[159].y + lm[145].y)/2
+
+    right_eye_x = (lm[362].x + lm[263].x)/2
+    right_eye_y = (lm[386].y + lm[374].y)/2
+
+    # -------------------------
+    # Iris center
+    # -------------------------
+
+    left_iris_x = np.mean([lm[i].x for i in [468,469,470,471,472]])
+    left_iris_y = np.mean([lm[i].y for i in [468,469,470,471,472]])
+
+    right_iris_x = np.mean([lm[i].x for i in [473,474,475,476,477]])
+    right_iris_y = np.mean([lm[i].y for i in [473,474,475,476,477]])
+
+    # -------------------------
+    # Eye size
+    # -------------------------
+
+    left_width = max(abs(lm[133].x - lm[33].x), 1e-6)
+    right_width = max(abs(lm[263].x - lm[362].x), 1e-6)
+
+    left_height = max(
+        lm[145].y - lm[159].y,
+        1e-6
+    )
+
+    right_height = max(
+        lm[374].y - lm[386].y,
+        1e-6
+    )
+
+    # -------------------------
+    # Relative iris
+    # -------------------------
+
+    left_rel_x = (left_iris_x - left_eye_x) / (left_width * 0.5)
+    left_rel_y = (left_iris_y - left_eye_y) / (left_height * 0.5)
+
+    right_rel_x = (right_iris_x - right_eye_x) / (right_width * 0.5)
+    right_rel_y = (right_iris_y - right_eye_y) / (right_height * 0.5)
+
+    left_rel_x = np.clip(left_rel_x, -1.2, 1.2)
+    left_rel_y = np.clip(left_rel_y, -1.2, 1.2)
+
+    right_rel_x = np.clip(right_rel_x, -1.2, 1.2)
+    right_rel_y = np.clip(right_rel_y, -1.2, 1.2)
+
     feat = np.array(
         [
             iris_x,
             iris_y,
+
             gaze_yaw,
             gaze_pitch,
+
             head_pose.get("yaw", 0.0),
             head_pose.get("pitch", 0.0),
             head_pose.get("roll", 0.0),
+
             head_pose.get("face_center_x", 0.5),
             head_pose.get("face_center_y", 0.5),
+
             face_scale_norm,
+
+            left_eye_x,
+            left_eye_y,
+            right_eye_x,
+            right_eye_y,
+
+            left_rel_x,
+            left_rel_y,
+            right_rel_x,
+            right_rel_y
         ],
         dtype=np.float64
     )

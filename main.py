@@ -247,6 +247,7 @@ def run_gaze_accuracy_test(
                 features = build_features(
                     iris_x,
                     iris_y,
+                    lms,
                     head_pose,
                     gaze_vec=last_gaze_vec,
                     frame_width=fw
@@ -554,6 +555,7 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
 
     mouth_mode = False
     show_debug_overlay = False   # d 키로 토글: head pose/gaze 진단 텍스트 표시 여부
+    show_cursor = True
 
     session_logger = SessionLogger(
         mode=mode,
@@ -715,6 +717,7 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                 features = build_features(
                     iris_x,
                     iris_y,
+                    lms,
                     head_pose,
                     gaze_vec=last_gaze_vec,
                     frame_width=fw
@@ -968,7 +971,15 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                 gaze_y = last_gaze_y
                 fixation_count = 0
 
-            kbd_bg = drawAll(kbd_bg, buttonList, gaze_x, gaze_y, dwell.dwell_key, dwell_ratio)
+            kbd_bg = drawAll(
+                kbd_bg,
+                buttonList,
+                gaze_x,
+                gaze_y,
+                dwell.dwell_key,
+                dwell_ratio,
+                show_cursor
+            )
 
             if tester.is_showing_complete():
                 kbd_bg = draw_test_complete_overlay(kbd_bg)
@@ -1225,7 +1236,13 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
                     )
 
-            kbd_bg = draw_gaze_cursor(kbd_bg, gaze_x, gaze_y, fixation_count)
+            if show_cursor:
+                kbd_bg = draw_gaze_cursor(
+                    kbd_bg,
+                    gaze_x,
+                    gaze_y,
+                    fixation_count
+                )
             kbd_bg = draw_status_bar(kbd_bg, is_korean, fixation_count)
 
             cv2.imshow("Eye Keyboard", kbd_bg)
@@ -1296,6 +1313,10 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
             elif key == ord('d'):
                 show_debug_overlay = not show_debug_overlay
                 print("show_debug_overlay:", show_debug_overlay)
+
+            elif key == ord('k'):
+                show_cursor = not show_cursor
+                print("show_cursor:", show_cursor)
 
             elif key == ord('m'):
                 mouth_mode = True
