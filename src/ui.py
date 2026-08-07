@@ -888,9 +888,17 @@ def draw_targeting_test_screen(
 
     success_count = results["success_count"]
 
-    remaining_time = (
-        targeting_runner.get_remaining_time()
+    prepare_remaining = (
+        targeting_runner.get_prepare_remaining_sec()
     )
+
+    if prepare_remaining > 0.0:
+        time_text = f"이동 준비 {prepare_remaining:.1f}초"
+    else:
+        remaining_time = (
+            targeting_runner.get_remaining_time()
+        )
+        time_text = f"남은 시간 {remaining_time:.1f}초"
 
     # 상단 카드 영역
     cv2.rectangle(
@@ -924,7 +932,7 @@ def draw_targeting_test_screen(
         f"진행 {current_trial} / "
         f"{targeting_runner.total_trials}"
         f"    |    성공 {success_count}"
-        f"    |    남은 시간 {remaining_time:.1f}초"
+        f"    |    {time_text}"
     )
 
     _draw_centered_pil_text(

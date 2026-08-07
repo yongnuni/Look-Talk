@@ -38,7 +38,8 @@ class TargetingTestRunner:
         target_radius: Optional[int] = None,
         dwell_sec: float = 1.0,
         timeout_sec: float = 5.0,
-        randomize: bool = True
+        randomize: bool = True,
+        prepare_sec: float = 2.0
     ):
         if not 1 <= total_trials <= 10:
             raise ValueError(
@@ -51,6 +52,7 @@ class TargetingTestRunner:
         self.dwell_sec = dwell_sec
         self.timeout_sec = timeout_sec
         self.randomize = randomize
+        self.prepare_sec = prepare_sec
 
         # 1536×864 화면 기준 약 69px,
         # 1280×720 화면 기준 약 60px 반지름
@@ -74,6 +76,7 @@ class TargetingTestRunner:
 
         self.current_index = 0
         self.trial_started_at: Optional[float] = None
+        self.prepare_started_at: Optional[float] = None
         self.dwell_started_at: Optional[float] = None
         self.complete_time: Optional[float] = None
 
@@ -177,7 +180,8 @@ class TargetingTestRunner:
         self.current_index = 0
         self.attempts = []
 
-        self.trial_started_at = now
+        self.trial_started_at = None
+        self.prepare_started_at = now
         self.dwell_started_at = None
         self.complete_time = None
 
@@ -192,8 +196,13 @@ class TargetingTestRunner:
         self.attempts = []
 
         self.trial_started_at = None
+        self.prepare_started_at = None
         self.dwell_started_at = None
         self.complete_time = None
+
+    @property
+    def is_preparing(self) -> bool:
+        return self.get_prepare_remaining_sec() > 0.0
 
     def is_inside_target(
         self,
@@ -241,6 +250,10 @@ class TargetingTestRunner:
 
         if now is None:
             now = time.monotonic()
+
+        if not self._start_trial_if_ready(now):
+            self.dwell_started_at = None
+            return None
 
         if self._is_timed_out(now):
             return self._finish_current_trial(
@@ -294,6 +307,9 @@ class TargetingTestRunner:
         if now is None:
             now = time.monotonic()
 
+        if not self._start_trial_if_ready(now):
+            return None
+
         success = self.is_inside_target(
             gaze_x,
             gaze_y
@@ -317,14 +333,17 @@ class TargetingTestRunner:
     ) -> float:
         """현재 타겟 내부 드웰 진행률을 0~1로 반환한다."""
 
-        if (
-            not self.active
-            or self.dwell_started_at is None
-        ):
+        if not self.active:
             return 0.0
 
         if now is None:
             now = time.monotonic()
+
+        if (
+            not self._start_trial_if_ready(now)
+            or self.dwell_started_at is None
+        ):
+            return 0.0
 
         elapsed = now - self.dwell_started_at
 
@@ -339,14 +358,14 @@ class TargetingTestRunner:
     ) -> float:
         """현재 회차의 남은 제한시간을 반환한다."""
 
-        if (
-            not self.active
-            or self.trial_started_at is None
-        ):
+        if not self.active:
             return 0.0
 
         if now is None:
             now = time.monotonic()
+
+        if not self._start_trial_if_ready(now):
+            return 0.0
 
         elapsed = now - self.trial_started_at
 
@@ -395,6 +414,44 @@ class TargetingTestRunner:
                 for attempt in self.attempts
             ],
         }
+
+    def get_prepare_remaining_sec(
+        self,
+        now: Optional[float] = None
+    ) -> float:
+        if (
+            not self.active
+            or self.prepare_started_at is None
+            or self.trial_started_at is not None
+        ):
+            return 0.0
+
+        if now is None:
+            now = time.monotonic()
+
+        return max(
+            0.0,
+            self.prepare_sec - (now - self.prepare_started_at)
+        )
+
+    def _start_trial_if_ready(self, now: float) -> bool:
+        if not self.active:
+            return False
+
+        if self.trial_started_at is not None:
+            return True
+
+        if self.prepare_started_at is None:
+            self.trial_started_at = now
+            return True
+
+        if now - self.prepare_started_at < self.prepare_sec:
+            return False
+
+        self.trial_started_at = (
+            self.prepare_started_at + self.prepare_sec
+        )
+        return True
 
     def _is_timed_out(self, now: float) -> bool:
         if self.trial_started_at is None:
@@ -451,6 +508,7 @@ class TargetingTestRunner:
             self.complete_time = now
 
         else:
-            self.trial_started_at = now
+            self.trial_started_at = None
+            self.prepare_started_at = now
 
         return attempt

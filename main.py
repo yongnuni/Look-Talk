@@ -880,10 +880,15 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
                     # 타겟 안을 바라볼 때만 가상의 "target" 영역으로
                     # 입벌림 선택을 감지한다.
-                    mouth_click, mar = mouth.update(
-                        lms,
-                        "target" if inside_target else None
-                    )
+                    if targeting_runner.is_preparing:
+                        mouth.reset()
+                        mouth_click = False
+                        mar = 0.0
+                    else:
+                        mouth_click, mar = mouth.update(
+                            lms,
+                            "target" if inside_target else None
+                        )
 
                     # 타겟 안에서 1초 연속 응시하면 드웰 성공
                     targeting_attempt = (
