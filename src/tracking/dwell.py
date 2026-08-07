@@ -21,21 +21,21 @@ class DwellController:
         self.dwell_start = None
         self.hover_lock_button = None
 
-    def update(self, gaze_x, gaze_y, buttonList):
+    def _zoom_scale(self, key_zoom, button):
+        """확대 중인 키는 히트박스도 같은 배율로 넓힌다. (없으면 1.0)"""
+        if key_zoom is None or button is None:
+            return 1.0
+        return key_zoom.get_hit_scale(button)
+
+    def update(self, gaze_x, gaze_y, buttonList, key_zoom=None):
         """
         현재 시선 좌표와 버튼 리스트를 받아 드웰 상태를 갱신합니다.
 
+        key_zoom:
+            KeyZoomController (선택). 넘기지 않으면 확대 이전과 동일하게 동작.
+
         Returns:
             (hovered_key, dwell_ratio, clicked_key)
-
-            hovered_key:
-                현재 hover 중인 키
-
-            dwell_ratio:
-                dwell 진행률, 0.0 ~ 1.0
-
-            clicked_key:
-                dwell 완료 시 입력할 키
         """
 
         now = time.time()
@@ -59,7 +59,7 @@ class DwellController:
         else:
             lock_radius = 40
 
-        # 1. 가장 가까운 버튼 찾기
+        # 1. 가장 가까운 버튼 찾기 (확대 배율로 정규화한 거리 기준)
         for button in buttonList:
 
             bx, by = button.pos
@@ -72,6 +72,8 @@ class DwellController:
                 gaze_x - center_x,
                 gaze_y - center_y
             )
+
+            distance /= self._zoom_scale(key_zoom, button)
 
             if distance < closest_dist:
                 closest_dist = distance
@@ -90,6 +92,8 @@ class DwellController:
                 gaze_x - center_x,
                 gaze_y - center_y
             )
+
+            lock_dist /= self._zoom_scale(key_zoom, self.hover_lock_button)
 
             if lock_dist < lock_radius:
                 hovered_key = self.hover_lock_button.text

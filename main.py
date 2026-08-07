@@ -10,6 +10,8 @@ from src.calibrations.baseline_manager import save_baseline
 from src.tracking.blink import BlinkDetector, BlinkKind
 import src.viz.viz as viz
 import matplotlib.pyplot as plt
+from src.tracking.fixation import FixationDetector
+from src.key_zoom import KeyZoomController
 
 import src.hangul as hangul
 
@@ -538,6 +540,8 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
     dwell = DwellController()
     mouth = MouthClickDetector()
     tester = TestRunner()
+    fixation = FixationDetector()
+    key_zoom = KeyZoomController()
     collector = None
     blink_detector = BlinkDetector(
         detect_natural=True,
@@ -639,6 +643,7 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
             dwell_ratio = 0.0
             mar = 0.0
             blink_event = None
+            fixation_state = None
 
             mapping_result = None
             sx = None
@@ -850,11 +855,20 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
 
             # ── 드웰 클릭 ─────────────────────────────────────
 
+                # ── 고정 감지 + 키 확대 (독립 모듈, 좌표는 건드리지 않음) ──
+                fixation_state = fixation.update(
+                    gaze_x if tracking_valid else -1,
+                    gaze_y if tracking_valid else -1
+                )
+
+                key_zoom.update(fixation_state, buttonList)
+
                 if tracking_valid:
                     hovered_key, dwell_ratio, clicked_key = dwell.update(
                         gaze_x,
                         gaze_y,
-                        buttonList
+                        buttonList,
+                        key_zoom
                     )
 
                     mouth_click, mar = mouth.update(
@@ -971,6 +985,11 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                 gaze_y = last_gaze_y
                 fixation_count = 0
 
+            # 얼굴이 안 잡힌 프레임에서도 고정 상태를 갱신해 확대가 남지 않게 한다
+            if fixation_state is None:
+                fixation_state = fixation.update(-1, -1)
+                key_zoom.update(fixation_state, buttonList)
+
             kbd_bg = drawAll(
                 kbd_bg,
                 buttonList,
@@ -978,7 +997,8 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                 gaze_y,
                 dwell.dwell_key,
                 dwell_ratio,
-                show_cursor
+                show_cursor,
+                key_zoom
             )
 
             if tester.is_showing_complete():
@@ -1255,6 +1275,8 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
             elif key == ord('r'):
                 mapper.reset()
                 gaze.reset()
+                fixation.reset()
+                key_zoom.reset()
 
                 if mode == MODE_CALIBRATED:
                     if not show_countdown(cap, face_mesh):

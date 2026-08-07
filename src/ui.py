@@ -44,10 +44,21 @@ small_font = ImageFont.truetype(
 )
 
 # 키캡 텍스트는 최종 확정된 row_h에 비례해 크기를 맞춘다(해상도별 자동 조정).
-key_font = ImageFont.truetype(
-    FONT_PATH,
-    max(18, int(LAYOUT["row_h"] * 0.42))
-)
+KEY_FONT_BASE_SIZE = max(18, int(LAYOUT["row_h"] * 0.42))
+
+key_font = ImageFont.truetype(FONT_PATH, KEY_FONT_BASE_SIZE)
+
+# 확대된 키는 라벨도 같이 커져야 하므로 크기별로 캐싱해 둔다.
+_key_font_cache = {KEY_FONT_BASE_SIZE: key_font}
+
+
+def _key_font_for(scale):
+    size = max(12, int(KEY_FONT_BASE_SIZE * scale))
+    cached = _key_font_cache.get(size)
+    if cached is None:
+        cached = ImageFont.truetype(FONT_PATH, size)
+        _key_font_cache[size] = cached
+    return cached
 
 
 # ── 카운트다운 ────────────────────────────────────────────────
@@ -395,41 +406,62 @@ def drawAll(
     gaze_y,
     dwell_key,
     dwell_ratio,
-    show_cursor
+    show_cursor,
+    key_zoom=None
 ):
 
     img_pil = Image.fromarray(img)
 
     draw = ImageDraw.Draw(img_pil)
 
-    for button in buttonList:
+    # 확대된 키가 인접 키에 가려지지 않도록 마지막에 그린다.
+    if key_zoom is not None:
+        ordered = (
+            [b for b in buttonList if not key_zoom.is_zoomed(b)]
+            + [b for b in buttonList if key_zoom.is_zoomed(b)]
+        )
+    else:
+        ordered = buttonList
+
+    for button in ordered:
 
         x, y = button.pos
         w, h = button.size
 
         key = button.text
 
-        on_key = (
-            x < gaze_x < x+w
-            and
-            y < gaze_y < y+h
+        # 고정 감지에 의한 확대 배율 (없으면 1.0 → 기존과 완전히 동일)
+        zoom_scale = (
+            key_zoom.get_scale(button)
+            if key_zoom is not None
+            else 1.0
         )
 
-        # 기본 크기
-        nx = x
-        ny = y
-        nw = w
-        nh = h
+        on_key = (
+            (
+                x < gaze_x < x + w
+                and
+                y < gaze_y < y + h
+            )
+            or zoom_scale > 1.0
+        )
 
-        # k키 모드일 때만 확대
+        # k키 모드(커서 숨김)일 때의 기존 확대와 병합
         if on_key and not show_cursor:
-            scale = 1.20
+            zoom_scale = max(zoom_scale, 1.20)
 
-            nw = int(w * scale)
-            nh = int(h * scale)
+        if zoom_scale > 1.0:
+            nw = int(w * zoom_scale)
+            nh = int(h * zoom_scale)
 
             nx = x - (nw - w) // 2
             ny = y - (nh - h) // 2
+
+        else:
+            nx = x
+            ny = y
+            nw = w
+            nh = h
 
         text_color = KEY_TEXT_COLOR
 
@@ -488,7 +520,7 @@ def drawAll(
         ):
 
             bar_w = int(
-                w * dwell_ratio
+                nw * dwell_ratio
             )
 
             draw.rounded_rectangle(
@@ -504,7 +536,9 @@ def drawAll(
 
         label = DISPLAY_LABELS.get(key, key)
 
-        bbox = draw.textbbox((0, 0), label, font=key_font)
+        label_font = _key_font_for(zoom_scale)
+
+        bbox = draw.textbbox((0, 0), label, font=label_font)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
 
@@ -514,7 +548,7 @@ def drawAll(
         draw.text(
             (text_x, text_y),
             label,
-            font=key_font,
+            font=label_font,
             fill=text_color
         )
 
