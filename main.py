@@ -10,6 +10,7 @@ from src.calibrations.baseline_manager import save_baseline
 from src.tracking.blink import BlinkDetector, BlinkKind
 import src.viz.viz as viz
 import matplotlib.pyplot as plt
+from src.cheonjiin import cheonjiin_composer
 
 import src.hangul as hangul
 
@@ -61,8 +62,11 @@ from src.tracking.feature_builder import build_features
 
 from src.keyboard import (
     create_buttons,
+    create_cheonjiin_buttons,
     process_key,
-    keys_kor_normal
+    keys_kor_normal,
+    KEYBOARD_LAYOUT_QWERTY,
+    KEYBOARD_LAYOUT_CHEONJIIN,
 )
 
 from src.ui import (
@@ -75,10 +79,13 @@ from src.ui import (
     draw_test_complete_overlay,
     draw_text_area,
     draw_mouth_calibration_screen,
+    draw_targeting_test_screen,
+    draw_targeting_result_screen,
     font
 )
 
 from tests.test_runner import TestRunner
+from tests.targeting_test_runner import TargetingTestRunner
 
 def auto_brightness(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -508,8 +515,7 @@ def show_session_popup(session_id):
     except Exception as e:
         print(f"[popup] 시각화 실패: {e}")
 
-def main(mode=MODE_CALIBRATED, strategy_name=None):
-
+def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):
     cap = cv2.VideoCapture(0)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -538,6 +544,17 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
     dwell = DwellController()
     mouth = MouthClickDetector()
     tester = TestRunner()
+
+    targeting_runner = TargetingTestRunner(
+        screen_w=SCREEN_W,
+        screen_h=SCREEN_H,
+        total_trials=10,
+        dwell_sec=1.0,
+        timeout_sec=5.0,
+        randomize=True
+    )
+    targeting_mode = False
+
     collector = None
     blink_detector = BlinkDetector(
         detect_natural=True,
@@ -573,7 +590,10 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
     backbone_frame_count = 0
     last_gaze_vec = None
 
-    buttonList = create_buttons(keys_kor_normal)
+    if keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN:
+        buttonList = create_cheonjiin_buttons()
+    else:
+        buttonList = create_buttons(keys_kor_normal)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
@@ -584,6 +604,7 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
         f"Eye Keyboard 시작 [mode={mode}] | "
         "r: 재캘리브레이션/리셋 | "
         "t: 시선정확도테스트(calibrated 전용) | "
+        "y: 10회 타겟팅 테스트 | "
         "m: 입벌림 입력 방식 변경 | "
         "p/h/g/o: 매핑 방식 전환(calibrated 전용) | "
         "b: 후보 마커 토글 | "
@@ -847,52 +868,181 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                             gaze_x,
                             gaze_y
                         )
+                # ── 독립 타겟팅 정확도 테스트 ─────────────────────
+            if targeting_mode:
+                targeting_attempt = None
+
+                if targeting_runner.active:
+                    inside_target = (
+                        tracking_valid
+                        and targeting_runner.is_inside_target(
+                            gaze_x,
+                            gaze_y
+                        )
+                    )
+
+                    # 타겟 안을 바라볼 때만 가상의 "target" 영역으로
+                    # 입벌림 선택을 감지한다.
+                    if targeting_runner.is_preparing:
+                        mouth.reset()
+                        mouth_click = False
+                        mar = 0.0
+                    else:
+                        mouth_click, mar = mouth.update(
+                            lms,
+                            "target" if inside_target else None
+                        )
+
+                    # 타겟 안에서 1초 연속 응시하면 드웰 성공
+                    targeting_attempt = (
+                        targeting_runner.update_dwell(
+                            gaze_x,
+                            gaze_y,
+                            tracking_valid
+                        )
+                    )
+
+                    # 같은 프레임에서 드웰과 입벌림이 동시에
+                    # 두 회차를 처리하지 않도록 attempt가 없을 때만 실행
+                    if (
+                        targeting_attempt is None
+                        and mouth_click
+                        and targeting_runner.active
+                    ):
+                        targeting_attempt = (
+                            targeting_runner.register_selection(
+                                gaze_x,
+                                gaze_y
+                            )
+                        )
+
+                    if targeting_attempt is not None:
+                        result_text = (
+                            "성공"
+                            if targeting_attempt.success
+                            else "실패"
+                        )
+
+                        print(
+                            "[타겟팅]",
+                            f"{targeting_attempt.trial}/"
+                            f"{targeting_runner.total_trials}",
+                            result_text,
+                            f"({targeting_attempt.reason})",
+                            f"{targeting_attempt.reaction_time_sec:.2f}초"
+                        )
+
+                # 10회 완료 여부에 따라 테스트 또는 결과 화면 표시
+                if targeting_runner.completed:
+                    targeting_canvas = (
+                        draw_targeting_result_screen(
+                            targeting_runner
+                        )
+                    )
+                else:
+                    targeting_canvas = (
+                        draw_targeting_test_screen(
+                            targeting_runner,
+                            gaze_x,
+                            gaze_y
+                        )
+                    )
+
+                # 진행 중에는 현재 시선 커서도 함께 표시
+                if (
+                    tracking_valid
+                    and targeting_runner.active
+                ):
+                    targeting_canvas = draw_gaze_cursor(
+                        targeting_canvas,
+                        gaze_x,
+                        gaze_y,
+                        fixation_count
+                    )
+
+                cv2.imshow(
+                    "Eye Keyboard",
+                    targeting_canvas
+                )
+
+                targeting_key = cv2.waitKey(1) & 0xFF
+
+                if targeting_key == ord('q'):
+                    break
+
+                # ESC: 타겟 테스트 종료 후 기존 키보드로 복귀
+                elif targeting_key == 27:
+                    targeting_mode = False
+                    targeting_runner.reset()
+                    dwell.reset()
+                    mouth.reset()
+
+                    print(
+                        "[타겟팅] 테스트 종료 → "
+                        "키보드 화면으로 복귀"
+                    )
+
+                # 결과 화면 또는 진행 중 Y 키를 누르면 처음부터 재시작
+                elif targeting_key == ord('y'):
+                    targeting_runner.start()
+                    dwell.reset()
+                    mouth.reset()
+
+                    print(
+                        "[타겟팅] 10회 테스트를 "
+                        "처음부터 다시 시작합니다."
+                    )
+
+                # 일반 키보드 입력·렌더링을 실행하지 않는다.
+                continue
 
             # ── 드웰 클릭 ─────────────────────────────────────
 
-                if tracking_valid:
-                    hovered_key, dwell_ratio, clicked_key = dwell.update(
-                        gaze_x,
-                        gaze_y,
-                        buttonList
-                    )
+            if tracking_valid:
+                hovered_key, dwell_ratio, clicked_key = dwell.update(
+                    gaze_x,
+                    gaze_y,
+                    buttonList
+                )
 
-                    mouth_click, mar = mouth.update(
-                        lms,
-                        hovered_key
-                    )
-                else:
-                    dwell.reset()
-                    hovered_key = None
-                    clicked_key = None
-                    dwell_ratio = 0.0
-                    mouth_click = False
-                    mar = 0.0
+                mouth_click, mar = mouth.update(
+                    lms,
+                    hovered_key
+                )
+            else:
+                dwell.reset()
+                hovered_key = None
+                clicked_key = None
+                dwell_ratio = 0.0
+                mouth_click = False
+                mar = 0.0
 
-                # 기존 드웰 클릭
-                if clicked_key:
-                    tester.on_key_press(clicked_key)
+            # 기존 드웰 클릭
+            if clicked_key:
+                tester.on_key_press(clicked_key)
 
-                    (is_korean, is_shift, buttonList) = process_key(
-                        clicked_key,
-                        is_korean,
-                        is_shift,
-                        buttonList
-                    )
+                (is_korean, is_shift, buttonList) = process_key(
+                    clicked_key,
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    keyboard_layout
+                )
 
-                # 입벌림 클릭
-                if mouth_click and hovered_key:
+            # 입벌림 클릭
+            if mouth_click and hovered_key:
 
-                    tester.on_key_press(hovered_key)
+                tester.on_key_press(hovered_key)
 
-                    (is_korean, is_shift, buttonList) = process_key(
-                        hovered_key,
-                        is_korean,
-                        is_shift,
-                        buttonList
-                    )
+                (is_korean, is_shift, buttonList) = process_key(
+                    hovered_key,
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    keyboard_layout
+                )
 
-                    print("MOUTH INPUT:", hovered_key)
+                print("MOUTH INPUT:", hovered_key)
                     
 
             # ── 렌더링 ────────────────────────────────────────
@@ -900,9 +1050,19 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
             kbd_bg = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
             kbd_bg[:] = (245, 246, 248)
 
+            pending_cheonjiin_text = ""
+            if (
+                keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+                and is_korean
+            ):
+                pending_cheonjiin_text = (
+                    cheonjiin_composer.get_pending_preview()
+                )
+
             current_text = (
-                hangul.finalText +
-                hangul.compose_jamo_buffer()
+                hangul.finalText
+                + hangul.compose_jamo_buffer()
+                + pending_cheonjiin_text
             )
 
             target = tester.target_text if tester.active else None
@@ -1324,6 +1484,21 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
 
                 print("입벌림 캘리브레이션 시작")
 
+            elif key == ord('y'):
+                targeting_runner.start()
+                targeting_mode = True
+
+                dwell.reset()
+                mouth.reset()
+
+                print()
+                print("===== 타겟팅 정확도 테스트 시작 =====")
+                print("총 10개의 원형 타겟을 순서대로 측정합니다.")
+                print("원 안을 1초간 응시하거나 입벌림으로 선택하세요.")
+                print("ESC: 키보드 복귀 | Y: 다시 시작")
+                print("====================================")
+                print()
+
             elif key == ord('t'):
 
                  if mode != MODE_CALIBRATED:
@@ -1366,19 +1541,19 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                         smoothing_mode="moving_average",
 
                         edge_mean_reproj_error_px=(
-                            calibrator.edge_mean_reproj_error_px
+                            mapper.calibrator.edge_mean_reproj_error_px
                         ),
                         center_mean_reproj_error_px=(
                             mapper.calibrator.center_mean_reproj_error_px
                         ),
                         calibration_fallback_used=(
-                            calibrator.calibration_fallback_used
+                            mapper.calibrator.calibration_fallback_used
                         ),
                         rejected_calib_rmse_px=(
                             mapper.calibrator.rejected_calib_rmse_px
                         ),
                         applied_calib_rmse_px=(
-                            calibrator.applied_calib_rmse_px
+                            mapper.calibrator.applied_calib_rmse_px
                         ),
                     )
 
@@ -1435,6 +1610,20 @@ def _parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--keyboard-layout",
+        dest="keyboard_layout",
+        choices=[
+            KEYBOARD_LAYOUT_QWERTY,
+            KEYBOARD_LAYOUT_CHEONJIIN,
+        ],
+        default=KEYBOARD_LAYOUT_QWERTY,
+        help=(
+            "키보드 배열. 'qwerty'는 기존 쿼티 배열이며, "
+            "'cheonjiin'은 천지인 3×4 배열을 사용한다."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -1446,9 +1635,22 @@ def _parse_args():
                 f"사용 가능한 strategy: {available}"
             )
 
-    return args.gaze_mode, args.strategy
+    return (
+        args.gaze_mode,
+        args.strategy,
+        args.keyboard_layout
+    )
 
 
 if __name__ == "__main__":
-    _mode, _strategy_name = _parse_args()
-    main(mode=_mode, strategy_name=_strategy_name)
+    (
+        _mode,
+        _strategy_name,
+        _keyboard_layout
+    ) = _parse_args()
+
+    main(
+        mode=_mode,
+        strategy_name=_strategy_name,
+        keyboard_layout=_keyboard_layout
+    )
