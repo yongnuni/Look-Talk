@@ -42,6 +42,8 @@ Look-Talk/
 ├── main.py                          # 앱 진입점. 웹캠 캡처→자동 밝기 보정(auto_brightness)→MediaPipe FaceMesh
 │                                     #   →캘리브레이션→시선 파이프라인→dwell/입벌림 클릭→키보드 입력의 메인 루프.
 │                                     #   run_gaze_accuracy_test(9점 테스트)와 종료 시 결과 팝업(show_session_popup)도 포함
+│                                     #   --keyboard-layout 옵션으로 QWERTY/천지인 레이아웃을 선택하며,
+│                                     #   y 키 기반 독립 10회 원형 타겟팅 테스트 실행 흐름 포함
 ├── README.md                        # 개발 환경 세팅 가이드 (Python 3.12 venv, mediapipe/opencv 등 설치 명령)
 ├── assets/
 │   └── cursor.png                   # 시선 커서로 그리는 PNG 이미지 (ui.draw_gaze_cursor에서 사용)
@@ -50,12 +52,16 @@ Look-Talk/
 │                                     #   — baseline_manager.save_baseline()의 출력물
 │
 └── src/
+    ├── cheonjiin.py                 # 천지인 입력 처리 모듈. 자음 연타와 ㅣ·ㆍ·ㅡ 기반 모음 조합,
+    │                                 #   미완성 모음 미리보기 및 되돌리기 상태 관리
     ├── config.py                    # 전역 상수: 화면 해상도 자동감지, PX_PER_CM(모니터 인치→px/cm 환산),
     │                                 #   캘리브레이션 16점 좌표, 안정화 시간, dwell/fixation 임계값 등
     ├── hangul.py                    # 한글 자모 조합 엔진 (초성/중성/종성 상태머신, 겹받침·이중모음 처리, jamo_buffer)
     ├── keyboard.py                  # 가상 키보드: 레이아웃 정의(한/영×기본/Shift), 버튼 생성·배치, 키 입력 처리(process_key)
+    │                                 #   QWERTY/천지인 레이아웃 선택, 천지인 버튼 생성 및 입력 처리 포함
     ├── ui.py                        # OpenCV+PIL 렌더링: 카운트다운, 캘리브레이션 화면, 키보드 그리기,
     │                                 #   시선 커서, 상태바, 테스트 완료 오버레이, 입벌림 캘리브레이션 화면
+    │                                 #   천지인 미완성 입력 표시, 원형 타겟팅 진행 화면 및 결과 화면 포함
     │
     ├── calibrations/
     │   ├── baseline_manager.py      # 입벌림 캘리브레이션 결과를 JSON으로 저장/로드
@@ -69,10 +75,14 @@ Look-Talk/
     │   │                            #   head pose 기반 iris 좌표 보정(compensate_iris_by_head_pose),
     │   │                            #   STB-11(재투영오차)/STB-12(입력안정성)/STB-13(수집품질) 계산 및 CSV 내보내기
     │   ├── dwell.py                 # 시선 dwell(응시 유지) 클릭 판정 (hover lock, dwell_ratio)
+    │   │                            #   클릭 후 쿨다운을 적용해 동일 키의 연속 오입력 방지
     │   ├── eye_tracking.py          # MediaPipe 홍채 좌표 계산, 눈 깜빡임(EAR) 검출, 홍채 추적 신뢰도(iris_confidence), 눈/홍채 시각화
     │   ├── gaze_pipeline.py         # Kalman 필터 스무딩 + fixation(응시 고정) 감지로 최종 시선 좌표 산출
+    │   │                            #   최근 좌표 이동평균, Dead Zone, 프레임당 최대 이동량 제한을 적용해
+    │   │                            #   미세 흔들림과 순간적인 좌표 튐을 완화
     │   ├── head_pose.py             # solvePnP/SQPnP 기반 head pose(yaw/pitch/roll/face_scale) 추정
     │   └── mouth.py                 # 입벌림 비율(MAR) 계산, MouthClickDetector(입벌림 클릭 판정)
+    │                                #   타겟팅 테스트 전환 시 감지 상태를 초기화하는 reset() 포함
     │
     ├── metrics/
     │   ├── collector.py             # MetricsCollector: 9점 테스트 지표 수집 엔진. 타깃별 오차(ACC-06)·
@@ -92,5 +102,8 @@ Look-Talk/
 
 tests/
 ├── test_runner.py                    # TestRunner: 문장 입력 테스트 진행 상태 관리 (키입력 수, 백스페이스, 반응시간, 완료 판정)
+├── targeting_test_runner.py          # 키보드와 독립된 10회 원형 타겟팅 테스트 관리.
+│                                     #   드웰 성공·timeout 실패·입벌림 선택 판정,
+│                                     #   성공/실패 횟수·명중률·평균 반응시간 계산
 └── test_sentences.py                 # 테스트용 문장 목록 (현재 2개: "안녕하세요", "감사합니다")
 ```
