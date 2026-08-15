@@ -1,0 +1,12 @@
+# main.py 실행에 실제로 필요한 최상위 런타임 패키지만 기록한다.
+# 각 패키지가 필요한 이유는 이 파일 하단의 보고 내용(대화 기록) 참고.
+# 전이 의존성(absl-py, protobuf, scipy, jax 등)은 각 패키지의 설치 과정에서
+# 자동으로 함께 설치되므로 여기 별도로 적지 않는다.
+
+opencv-contrib-python==4.11.0.86
+numpy==1.26.4
+mediapipe==0.10.20
+pillow==12.2.0
+matplotlib==3.10.9
+jamo==0.4.1
+pandas==3.0.3

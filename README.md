@@ -27,6 +27,14 @@ python -m pip install pillow
 
 python -m pip install jamo
 
+<릿지>
+
+pip install scikit-learn
+
+<백본>
+
+pip install torch torchvision onnx onnxruntime huggingface_hub
+
 ## 폴더 구조
 
 ```
@@ -34,6 +42,8 @@ Look-Talk/
 ├── main.py                          # 앱 진입점. 웹캠 캡처→자동 밝기 보정(auto_brightness)→MediaPipe FaceMesh
 │                                     #   →캘리브레이션→시선 파이프라인→dwell/입벌림 클릭→키보드 입력의 메인 루프.
 │                                     #   run_gaze_accuracy_test(9점 테스트)와 종료 시 결과 팝업(show_session_popup)도 포함
+│                                     #   --keyboard-layout 옵션으로 QWERTY/천지인 레이아웃을 선택하며,
+│                                     #   y 키 기반 독립 10회 원형 타겟팅 테스트 실행 흐름 포함
 ├── README.md                        # 개발 환경 세팅 가이드 (Python 3.12 venv, mediapipe/opencv 등 설치 명령)
 ├── assets/
 │   └── cursor.png                   # 시선 커서로 그리는 PNG 이미지 (ui.draw_gaze_cursor에서 사용)
@@ -42,12 +52,16 @@ Look-Talk/
 │                                     #   — baseline_manager.save_baseline()의 출력물
 │
 └── src/
+    ├── cheonjiin.py                 # 천지인 입력 처리 모듈. 자음 연타와 ㅣ·ㆍ·ㅡ 기반 모음 조합,
+    │                                 #   미완성 모음 미리보기 및 되돌리기 상태 관리
     ├── config.py                    # 전역 상수: 화면 해상도 자동감지, PX_PER_CM(모니터 인치→px/cm 환산),
     │                                 #   캘리브레이션 16점 좌표, 안정화 시간, dwell/fixation 임계값 등
     ├── hangul.py                    # 한글 자모 조합 엔진 (초성/중성/종성 상태머신, 겹받침·이중모음 처리, jamo_buffer)
     ├── keyboard.py                  # 가상 키보드: 레이아웃 정의(한/영×기본/Shift), 버튼 생성·배치, 키 입력 처리(process_key)
+    │                                 #   QWERTY/천지인 레이아웃 선택, 천지인 버튼 생성 및 입력 처리 포함
     ├── ui.py                        # OpenCV+PIL 렌더링: 카운트다운, 캘리브레이션 화면, 키보드 그리기,
     │                                 #   시선 커서, 상태바, 테스트 완료 오버레이, 입벌림 캘리브레이션 화면
+    │                                 #   천지인 미완성 입력 표시, 원형 타겟팅 진행 화면 및 결과 화면 포함
     │
     ├── calibrations/
     │   ├── baseline_manager.py      # 입벌림 캘리브레이션 결과를 JSON으로 저장/로드
@@ -61,10 +75,14 @@ Look-Talk/
     │   │                            #   head pose 기반 iris 좌표 보정(compensate_iris_by_head_pose),
     │   │                            #   STB-11(재투영오차)/STB-12(입력안정성)/STB-13(수집품질) 계산 및 CSV 내보내기
     │   ├── dwell.py                 # 시선 dwell(응시 유지) 클릭 판정 (hover lock, dwell_ratio)
+    │   │                            #   클릭 후 쿨다운을 적용해 동일 키의 연속 오입력 방지
     │   ├── eye_tracking.py          # MediaPipe 홍채 좌표 계산, 눈 깜빡임(EAR) 검출, 홍채 추적 신뢰도(iris_confidence), 눈/홍채 시각화
     │   ├── gaze_pipeline.py         # Kalman 필터 스무딩 + fixation(응시 고정) 감지로 최종 시선 좌표 산출
+    │   │                            #   최근 좌표 이동평균, Dead Zone, 프레임당 최대 이동량 제한을 적용해
+    │   │                            #   미세 흔들림과 순간적인 좌표 튐을 완화
     │   ├── head_pose.py             # solvePnP/SQPnP 기반 head pose(yaw/pitch/roll/face_scale) 추정
     │   └── mouth.py                 # 입벌림 비율(MAR) 계산, MouthClickDetector(입벌림 클릭 판정)
+    │                                #   타겟팅 테스트 전환 시 감지 상태를 초기화하는 reset() 포함
     │
     ├── metrics/
     │   ├── collector.py             # MetricsCollector: 9점 테스트 지표 수집 엔진. 타깃별 오차(ACC-06)·
@@ -84,11 +102,37 @@ Look-Talk/
 
 tests/
 ├── test_runner.py                    # TestRunner: 문장 입력 테스트 진행 상태 관리 (키입력 수, 백스페이스, 반응시간, 완료 판정)
+├── targeting_test_runner.py          # 키보드와 독립된 10회 원형 타겟팅 테스트 관리.
+│                                     #   드웰 성공·timeout 실패·입벌림 선택 판정,
+│                                     #   성공/실패 횟수·명중률·평균 반응시간 계산
 └── test_sentences.py                 # 테스트용 문장 목록 (현재 2개: "안녕하세요", "감사합니다")
 ```
 
-<릿지>
-pip install scikit-learn
+## 배포 실행 가이드 (팀원용 초안)
 
-<백본>
-pip install torch torchvision onnx onnxruntime huggingface_hub
+분산 테스트를 위해 각자 컴퓨터에서 실행할 때 아래 설정 확인 바람.
+
+### 1. 실행 전 설정
+
+- **모니터 크기**: `src/config.py`의 `MONITOR_DIAGONAL_INCH`를 자기 모니터의 대각선 인치로 수정한다(위 requirement 섹션 참고). px→cm 환산(`PX_PER_CM`)이 이 값에서 파생되므로, 안 맞추면 정확도 지표(cm 단위)가 왜곡된다.
+- **참가자 식별자(user_id)**: 기본값은 `yejin`으로 고정돼 있다. 다른 사람이 실행한 결과를 구분하려면 실행 시 `--user-id` 옵션을 지정한다:
+  ```
+  python main.py --user-id <자기이름>
+  ```
+  지정하지 않으면 sessions.csv 등 모든 로그에 `yejin`으로 기록되니, 팀원별 결과를 CSV 하나에서 구분해야 한다면 반드시 지정한다.
+
+### 2. 실행 순서
+
+```
+python main.py [--keyboard-layout qwerty|cheonjiin] [--user-id <이름>]
+```
+
+1. 캘리브레이션 화면에서 16점을 순서대로 응시(캘리브레이션 자동 진행)
+2. 캘리브레이션 완료 후 나오는 가상 키보드로 화면 상단에 표시된 목표 문장을 끝까지 입력(dwell 또는 입벌림 클릭으로 키 선택, 백스페이스 포함해도 무방 — 오히려 오타율 지표 수집에 도움이 됨)
+3. `t`: 9점 시선 정확도 테스트 실행(캘리브레이션된 모드에서만 동작)
+4. `y`: (선택) 10회 원형 타겟팅 테스트 실행/재시작. `ESC`로 중도 종료 가능
+5. `q`: 앱 종료 — 이 시점에 sessions.csv 등 세션 메타데이터가 항상 저장된다(9점 테스트를 아예 안 했어도, 문장을 끝까지 안 쳤어도 저장됨)
+
+### 3. 결과 제출
+
+`gaze_accuracy_results/`와 `calibration_results/`(baseline.json 계열) 폴더 전체를 CSV/JSON 그대로 제출한다. 개별 파일을 골라내지 말고 폴더째 보내는 편이 안전하다.(append 누적 파일이라 실행 여러 번 섞여 있어도 run_id로 나중에 구분 가능)

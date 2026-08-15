@@ -60,6 +60,11 @@ def _key_font_for(scale):
         _key_font_cache[size] = cached
     return cached
 
+function_key_font = ImageFont.truetype(
+    FONT_PATH,
+    max(20, int(LAYOUT["row_h"] * 0.30))
+)
+
 
 # ── 카운트다운 ────────────────────────────────────────────────
 
@@ -536,9 +541,20 @@ def drawAll(
 
         label = DISPLAY_LABELS.get(key, key)
 
+        current_key_font = (
+            function_key_font
+            if getattr(button, "font_role", "default") == "function_small"
+            else key_font
+        )
+
         label_font = _key_font_for(zoom_scale)
 
-        bbox = draw.textbbox((0, 0), label, font=label_font)
+        bbox = draw.textbbox(
+            (0, 0),
+            label,
+            font=current_label_font
+        )
+
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
 
@@ -548,7 +564,7 @@ def drawAll(
         draw.text(
             (text_x, text_y),
             label,
-            font=label_font,
+            font=current_key_font,
             fill=text_color
         )
 
@@ -854,6 +870,345 @@ def draw_mouth_calibration_screen(
         "r : 다시하기   q : 종료",
         font=small_font,
         fill=(150, 150, 150)
+    )
+
+    return np.array(img_pil)
+# ── 독립 타겟팅 정확도 테스트 화면 ─────────────────────────────
+
+def _draw_centered_pil_text(
+    draw,
+    text,
+    y,
+    text_font,
+    fill,
+    canvas_width=SCREEN_W
+):
+    """PIL로 한글 문장을 화면 가로 중앙에 출력한다."""
+
+    bbox = draw.textbbox(
+        (0, 0),
+        text,
+        font=text_font
+    )
+
+    text_w = bbox[2] - bbox[0]
+
+    draw.text(
+        (
+            (canvas_width - text_w) // 2,
+            y
+        ),
+        text,
+        font=text_font,
+        fill=fill
+    )
+
+
+def draw_targeting_test_screen(
+    targeting_runner,
+    gaze_x=None,
+    gaze_y=None
+):
+    """
+    키보드와 분리된 원형 타겟팅 테스트 화면을 그린다.
+
+    - 중간 크기의 원형 타겟
+    - 진행 횟수
+    - 현재 성공 횟수
+    - 남은 시간
+    - 드웰 진행 원
+    """
+
+    canvas = np.zeros(
+        (SCREEN_H, SCREEN_W, 3),
+        dtype=np.uint8
+    )
+
+    canvas[:] = (245, 246, 248)
+
+    title_font = ImageFont.truetype(
+        FONT_PATH,
+        max(30, int(SCREEN_H * 0.045))
+    )
+
+    info_font = ImageFont.truetype(
+        FONT_PATH,
+        max(20, int(SCREEN_H * 0.027))
+    )
+
+    instruction_font = ImageFont.truetype(
+        FONT_PATH,
+        max(22, int(SCREEN_H * 0.030))
+    )
+
+    results = targeting_runner.get_results()
+
+    current_trial = (
+        targeting_runner.current_trial_number
+    )
+
+    success_count = results["success_count"]
+
+    prepare_remaining = (
+        targeting_runner.get_prepare_remaining_sec()
+    )
+
+    if prepare_remaining > 0.0:
+        time_text = f"이동 준비 {prepare_remaining:.1f}초"
+    else:
+        remaining_time = (
+            targeting_runner.get_remaining_time()
+        )
+        time_text = f"남은 시간 {remaining_time:.1f}초"
+
+    # 상단 카드 영역
+    cv2.rectangle(
+        canvas,
+        (0, 0),
+        (SCREEN_W, 125),
+        (255, 255, 255),
+        -1
+    )
+
+    cv2.line(
+        canvas,
+        (0, 125),
+        (SCREEN_W, 125),
+        (215, 218, 223),
+        2
+    )
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    _draw_centered_pil_text(
+        draw,
+        "타겟팅 정확도 테스트",
+        18,
+        title_font,
+        (35, 38, 45)
+    )
+
+    info_text = (
+        f"진행 {current_trial} / "
+        f"{targeting_runner.total_trials}"
+        f"    |    성공 {success_count}"
+        f"    |    {time_text}"
+    )
+
+    _draw_centered_pil_text(
+        draw,
+        info_text,
+        75,
+        info_font,
+        (85, 90, 100)
+    )
+
+    canvas = np.array(img_pil)
+
+    target = targeting_runner.current_target
+
+    if target is not None:
+        target_x, target_y = target
+        radius = targeting_runner.target_radius
+
+        # 타겟 바깥 그림자
+        cv2.circle(
+            canvas,
+            (target_x + 5, target_y + 7),
+            radius,
+            (210, 213, 220),
+            -1
+        )
+
+        # 중간 크기의 원형 타겟
+        cv2.circle(
+            canvas,
+            (target_x, target_y),
+            radius,
+            (220, 235, 255),
+            -1
+        )
+
+        # 타겟 외곽선
+        cv2.circle(
+            canvas,
+            (target_x, target_y),
+            radius,
+            (70, 120, 210),
+            5
+        )
+
+        # 중심 표시
+        cv2.circle(
+            canvas,
+            (target_x, target_y),
+            max(8, radius // 8),
+            (70, 120, 210),
+            -1
+        )
+
+        # 드웰 진행률
+        dwell_ratio = (
+            targeting_runner.get_dwell_ratio()
+        )
+
+        if dwell_ratio > 0:
+            end_angle = int(
+                -90 + 360 * dwell_ratio
+            )
+
+            cv2.ellipse(
+                canvas,
+                (target_x, target_y),
+                (radius + 10, radius + 10),
+                0,
+                -90,
+                end_angle,
+                (40, 180, 110),
+                9
+            )
+
+    # 하단 안내 카드
+    cv2.rectangle(
+        canvas,
+        (0, SCREEN_H - 90),
+        (SCREEN_W, SCREEN_H),
+        (255, 255, 255),
+        -1
+    )
+
+    cv2.line(
+        canvas,
+        (0, SCREEN_H - 90),
+        (SCREEN_W, SCREEN_H - 90),
+        (215, 218, 223),
+        2
+    )
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    _draw_centered_pil_text(
+        draw,
+        "원 안을 바라보고 일정 시간 응시하세요",
+        SCREEN_H - 62,
+        instruction_font,
+        (55, 60, 70)
+    )
+
+    return np.array(img_pil)
+
+
+def draw_targeting_result_screen(
+    targeting_runner
+):
+    """10회 타겟팅 평가가 끝난 뒤 결과 화면을 그린다."""
+
+    canvas = np.zeros(
+        (SCREEN_H, SCREEN_W, 3),
+        dtype=np.uint8
+    )
+
+    canvas[:] = (245, 246, 248)
+
+    title_font = ImageFont.truetype(
+        FONT_PATH,
+        max(34, int(SCREEN_H * 0.052))
+    )
+
+    metric_font = ImageFont.truetype(
+        FONT_PATH,
+        max(24, int(SCREEN_H * 0.034))
+    )
+
+    guide_font = ImageFont.truetype(
+        FONT_PATH,
+        max(20, int(SCREEN_H * 0.026))
+    )
+
+    results = targeting_runner.get_results()
+
+    success_count = results["success_count"]
+    failure_count = results["failure_count"]
+    total_trials = results["total_trials"]
+    hit_rate = results["hit_rate_percent"]
+    average_reaction_time = (
+        results["average_reaction_time_sec"]
+    )
+
+    # 중앙 결과 카드
+    card_w = int(SCREEN_W * 0.62)
+    card_h = int(SCREEN_H * 0.68)
+
+    card_x1 = (SCREEN_W - card_w) // 2
+    card_y1 = (SCREEN_H - card_h) // 2
+    card_x2 = card_x1 + card_w
+    card_y2 = card_y1 + card_h
+
+    cv2.rectangle(
+        canvas,
+        (card_x1 + 8, card_y1 + 10),
+        (card_x2 + 8, card_y2 + 10),
+        (215, 218, 223),
+        -1
+    )
+
+    cv2.rectangle(
+        canvas,
+        (card_x1, card_y1),
+        (card_x2, card_y2),
+        (255, 255, 255),
+        -1
+    )
+
+    cv2.rectangle(
+        canvas,
+        (card_x1, card_y1),
+        (card_x2, card_y2),
+        (205, 210, 218),
+        2
+    )
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    _draw_centered_pil_text(
+        draw,
+        "타겟팅 테스트 완료",
+        card_y1 + 45,
+        title_font,
+        (35, 38, 45)
+    )
+
+    metrics = [
+        f"성공 횟수     {success_count} / {total_trials}",
+        f"실패 횟수     {failure_count} / {total_trials}",
+        f"타겟 명중률   {hit_rate:.1f}%",
+        (
+            "평균 반응시간   "
+            f"{average_reaction_time:.2f}초"
+        ),
+    ]
+
+    start_y = card_y1 + 155
+    line_gap = max(55, int(SCREEN_H * 0.075))
+
+    for index, metric in enumerate(metrics):
+        _draw_centered_pil_text(
+            draw,
+            metric,
+            start_y + index * line_gap,
+            metric_font,
+            (55, 60, 70)
+        )
+
+    _draw_centered_pil_text(
+        draw,
+        "Y 키: 다시 시작    |    ESC 키: 키보드로 돌아가기",
+        card_y2 - 70,
+        guide_font,
+        (100, 105, 115)
     )
 
     return np.array(img_pil)

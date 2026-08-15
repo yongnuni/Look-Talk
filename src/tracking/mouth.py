@@ -72,6 +72,13 @@ class MouthClickDetector:
         self.clicked = False
         self.start_key = None
 
+    def reset(self):
+        """진행 중인 입벌림 선택 상태를 초기화한다."""
+
+        self.open_start = None
+        self.clicked = False
+        self.start_key = None
+
     def update(
         self,
         landmarks,

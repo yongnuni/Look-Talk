@@ -1,25 +1,32 @@
 import cv2
 import numpy as np
 import csv
+import json
 import math
 import time
 import os
 from datetime import datetime
 from PIL import Image, ImageDraw
-from src.calibrations.baseline_manager import save_baseline
+from src.calibrations.baseline_manager import save_baseline, load_baseline
 from src.tracking.blink import BlinkDetector, BlinkKind
 import src.viz.viz as viz
 import matplotlib.pyplot as plt
+from src.cheonjiin import cheonjiin_composer
 from src.tracking.fixation import FixationDetector
 from src.key_zoom import KeyZoomController
 
 import src.hangul as hangul
+
+from src.common import clock, ids
+from src.common.config_snapshot import build_snapshot, snapshot_hash
+from src.metrics.csv_export import append_rows
 
 from src.config import (
     SCREEN_W,
     SCREEN_H,
     PX_PER_CM,
     GAZE_AVG_WINDOW,
+    MONITOR_DIAGONAL_INCH,
 )
 
 from src.tracking.eye_tracking import (
@@ -63,9 +70,15 @@ from src.tracking.feature_builder import build_features
 
 from src.keyboard import (
     create_buttons,
+    create_cheonjiin_buttons,
     process_key,
-    keys_kor_normal
+    keys_kor_normal,
+    KEYBOARD_LAYOUT_QWERTY,
+    KEYBOARD_LAYOUT_CHEONJIIN,
+    get_button_center,
+    DISPLAY_LABELS,
 )
+from src.metrics.input_event_logger import InputEventLogger
 
 from src.ui import (
     show_countdown,
@@ -77,10 +90,13 @@ from src.ui import (
     draw_test_complete_overlay,
     draw_text_area,
     draw_mouth_calibration_screen,
+    draw_targeting_test_screen,
+    draw_targeting_result_screen,
     font
 )
 
 from tests.test_runner import TestRunner
+from tests.targeting_test_runner import TargetingTestRunner
 
 def auto_brightness(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -491,14 +507,14 @@ def run_gaze_accuracy_test(
 
 # 테스트 결과 자동 시각화 (개발용)
 
-def show_session_popup(session_id):
+def show_session_popup(test_id):
     try:
         viz.setup_font()
         df = viz.load_data("gaze_accuracy_results")
-        s = viz.get_session(df, session_id)
+        s = viz.get_session(df, test_id)
 
         if len(s) == 0:
-            print(f"[popup] 세션을 찾을 수 없음: {session_id}")
+            print(f"[popup] 세션을 찾을 수 없음: {test_id}")
             return
 
         print(viz.format_summary_line(viz.summarize_session(s)))
@@ -510,7 +526,193 @@ def show_session_popup(session_id):
     except Exception as e:
         print(f"[popup] 시각화 실패: {e}")
 
-def main(mode=MODE_CALIBRATED, strategy_name=None):
+
+def export_targeting_results(run_id, keyboard_layout, targeting_runner, aborted):
+    """10회 원형 타겟팅 테스트 결과를 타깃 1개당 1행으로 저장한다.
+
+    지금까지는 get_results()가 화면 렌더링에만 쓰이고 앱 종료 시 그대로
+    소실됐다(docs/current_state_report.md 1-2절). TargetingTestRunner
+    자체는 팀원 코드라 손대지 않고, 여기(main.py)에서 완료·중도 종료
+    시점에 결과만 꺼내 CSV로 내보낸다.
+
+    input_mode는 TargetAttempt.reason("dwell"/"selection_hit"/
+    "selection_miss"/"timeout")에서 역산한다 — 러너가 이미 구분해 두고
+    있어 별도 판정 로직을 추가하지 않는다. target_x/y, cursor(=selected)_x/y도
+    TargetAttempt에 이미 있어 함께 기록한다.
+
+    reason → input_mode 매핑 근거 (tests/targeting_test_runner.py 기준,
+    팀원 코드라 확인만 하고 직접 수정하지 않음):
+    - "dwell": update_dwell()의 성공 분기(targeting_test_runner.py:280-287)
+      에서만 설정된다. gaze가 dwell_sec 이상 연속으로 타겟 내부에 머물렀을
+      때만 도달하는 경로라 mouth_click과 무관 — "dwell" 트리거로 확정.
+    - "selection_hit"/"selection_miss": register_selection()
+      (targeting_test_runner.py:313-328)에서만 설정되고, 이 메서드는
+      main.py에서 mouth.update()의 반환값 mouth_click이 True일 때만
+      호출된다(위 mouth_click, mar = mouth.update(...) 및 아래
+      register_selection() 호출부 참고) — "mouth"(입벌림) 트리거로 확정.
+    - "timeout": update_dwell()의 타임아웃 분기(targeting_test_runner.py:
+      258-265)에서 설정된다. update_dwell()과 mouth_click 판정(바로 위
+      if/else 블록)은 targeting_mode 활성 중 매 프레임 mouth_mode 값과
+      무관하게 함께 실행된다 — 즉 한 trial 안에서 dwell·mouth 두 트리거가
+      항상 동시에 살아있어, timeout은 "둘 다 시간 안에 성공하지 못함"만
+      의미할 뿐 사용자가 어느 쪽을 시도했는지 구분할 근거가 없다. 추측으로
+      채우지 않고 input_mode를 비워 기록한다(None).
+    """
+    if not targeting_runner.attempts:
+        return
+
+    fieldnames = [
+        "run_id",
+        "keyboard_layout",
+        "ts_ms",
+        "target_index",
+        "success",
+        "reaction_time_sec",
+        "input_mode",
+        "timeout",
+        "target_x",
+        "target_y",
+        "cursor_x",
+        "cursor_y",
+        "aborted",
+    ]
+
+    ts_ms = clock.now_ms()
+    rows = []
+
+    for attempt in targeting_runner.attempts:
+        if attempt.reason == "dwell":
+            input_mode = "dwell"  # update_dwell() 성공 분기 전용 — 근거는 위 함수 docstring
+        elif attempt.reason in ("selection_hit", "selection_miss"):
+            input_mode = "mouth"  # register_selection()은 mouth_click=True일 때만 호출됨
+        else:
+            input_mode = None  # timeout: dwell·mouth 트리거가 동시에 살아있어 구분 불가 — 추측 금지
+
+        rows.append({
+            "run_id": run_id,
+            "keyboard_layout": keyboard_layout,
+            "ts_ms": ts_ms,
+            "target_index": attempt.trial,
+            "success": attempt.success,
+            "reaction_time_sec": round(attempt.reaction_time_sec, 3),
+            "input_mode": input_mode,
+            "timeout": attempt.reason == "timeout",
+            "target_x": attempt.target_x,
+            "target_y": attempt.target_y,
+            "cursor_x": attempt.selected_x,
+            "cursor_y": attempt.selected_y,
+            "aborted": aborted,
+        })
+
+    append_rows(
+        os.path.join("gaze_accuracy_results", "targeting_results_v1.0.csv"),
+        fieldnames,
+        rows,
+    )
+
+
+def append_mouth_baseline_history(run_id, saved_path):
+    """baseline.json 저장 시마다 calibration_results/mouth_baseline_history_v1.0.csv에
+    1행을 append한다.
+
+    baseline_manager.py(src/calibrations/)는 팀원 영역이라 건드리지 않는다 —
+    baseline.json의 덮어쓰기 동작 자체는 그대로 두고, 방금 그 파일이 쓰인
+    직후 이미 있는 load_baseline()으로 다시 읽어(=수정 없이 읽기 전용 재사용)
+    이력만 별도로 쌓는다. saved_at은 baseline_manager.py가 실제로 쓴 값을
+    그대로 가져온다(main.py에서 새로 datetime.now()를 부르면 미세하게
+    다른 값이 될 수 있어, "기존 값 유지" 요구를 정확히 지키기 위해
+    저장된 파일을 다시 읽는 방식을 택했다).
+    """
+    baseline = load_baseline(saved_path)
+
+    if baseline is None:
+        print(f"[baseline] 이력 CSV 기록 실패: {saved_path}를 다시 읽지 못함")
+        return
+
+    mouth_result = baseline.get("mouth") or {}
+
+    row = {
+        "run_id": run_id,
+        "ts_ms": clock.now_ms(),
+        "saved_at": baseline.get("saved_at"),
+    }
+    row.update(mouth_result)
+
+    fieldnames = ["run_id", "ts_ms", "saved_at"] + list(mouth_result.keys())
+
+    append_rows(
+        os.path.join("calibration_results", "mouth_baseline_history_v1.0.csv"),
+        fieldnames,
+        [row],
+    )
+
+
+def log_input_tap(
+    input_event_logger,
+    frame_id,
+    input_mode,
+    keyboard_layout,
+    key_id,
+    button_list,
+    target_char,
+    hover_start_ts_ms,
+    cursor_x,
+    cursor_y,
+    deleted_count,
+    inserted_text,
+    trigger_signal,
+):
+    """dwell/mouth 훅 공용 - tap_commit 이벤트 한 건을 InputEventLogger에 넘긴다.
+
+    button_list는 반드시 process_key() 호출 "이전" 버튼 목록이어야 한다 -
+    한/영 전환처럼 process_key()가 buttonList 자체를 새로 만들면, 방금 누른
+    key_id(예: "ㅂ")가 새 버튼 목록에는 없어 key_center를 못 찾기 때문이다.
+    target_char도 마찬가지로 호출자가 process_key() 호출 "이전"에 계산해
+    넘겨야 한다 - 이 탭이 실제로 노렸던 목표 문자를 남기려는 것이지,
+    이 탭 이후 다음에 쳐야 할 문자를 남기려는 게 아니다.
+    """
+    key_center = get_button_center(button_list, key_id)
+    key_center_x, key_center_y = key_center if key_center else (None, None)
+
+    hover_to_commit_ms = (
+        clock.now_ms() - hover_start_ts_ms
+        if hover_start_ts_ms is not None
+        else None
+    )
+
+    input_event_logger.log_tap_commit(
+        frame_id=frame_id,
+        input_mode=input_mode,
+        keyboard_layout=keyboard_layout,
+        key_id=key_id,
+        key_label=DISPLAY_LABELS.get(key_id, key_id),
+        is_backspace=(key_id == "Del"),
+        deleted_count=deleted_count,
+        inserted_text=inserted_text,
+        hover_to_commit_ms=hover_to_commit_ms,
+        cursor_x=cursor_x,
+        cursor_y=cursor_y,
+        key_center_x=key_center_x,
+        key_center_y=key_center_y,
+        target_char=target_char,
+        trigger_signal=trigger_signal,
+    )
+
+
+def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY,user_id="yejin"):
+    # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
+    # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
+    clock.init()
+    run_id = ids.new_run_id()
+
+    # 실험 조건 스냅샷: 9점 테스트('t') 여부와 무관하게 sessions 행에는
+    # 항상 필요하므로 앱 실행 시작 시점에 1회 고정한다. config.py는 프로세스
+    # 중 값이 바뀌지 않으므로 여기서 미리 계산해도 't' 분기와 결과가 같다.
+    config_snapshot_dict = build_snapshot()
+    config_hash = snapshot_hash(config_snapshot_dict)
+    config_json = json.dumps(
+        config_snapshot_dict, sort_keys=True, ensure_ascii=False
+    )
 
     cap = cv2.VideoCapture(0)
 
@@ -535,14 +737,34 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
     )
 
     mapper = create_mapper(mode, strategy_name)
+
+    # Calibrator는 mapper 내부(CalibratedMapper._calibrator)에서 생성되므로
+    # 생성자 인자로는 주입할 수 없다. calibrated_mapper.py의 `calibrator`
+    # property(외부 공개용 탈출구로 이미 문서화돼 있음)를 통해 run_id만
+    # 넘긴다 — no_calibration 모드는 calibrator 자체가 없으므로 hasattr로 가드.
+    if hasattr(mapper, "calibrator"):
+        mapper.calibrator.set_run_id(run_id)
+
     mouth_calibrator = MouthCalibration()
     gaze = GazePipeline()
     dwell = DwellController()
     mouth = MouthClickDetector()
-    tester = TestRunner()
+    tester = TestRunner(run_id=run_id)
+
+    targeting_runner = TargetingTestRunner(
+        screen_w=SCREEN_W,
+        screen_h=SCREEN_H,
+        total_trials=10,
+        dwell_sec=1.0,
+        timeout_sec=5.0,
+        randomize=True
+    )
+    targeting_mode = False
+
     fixation = FixationDetector()
     key_zoom = KeyZoomController()
     collector = None
+    session_exported = False
     blink_detector = BlinkDetector(
         detect_natural=True,
         detect_intentional=True
@@ -566,9 +788,12 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
         mapper_metadata=mapper.get_metadata(),
         screen_w=SCREEN_W,
         screen_h=SCREEN_H,
+        run_id=run_id,
     )
 
-    last_session_id = None
+    input_event_logger = InputEventLogger(run_id=run_id)
+
+    last_test_id = None
 
     last_gaze_x = SCREEN_W // 2
     last_gaze_y = SCREEN_H // 2
@@ -577,7 +802,20 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
     backbone_frame_count = 0
     last_gaze_vec = None
 
-    buttonList = create_buttons(keys_kor_normal)
+    # 메인 루프 프레임 카운터 (SessionLogger와는 별개 - 4단계에서
+    # SessionLogger 스키마를 올릴 때 같은 값을 공유시킬 예정).
+    frame_id = 0
+
+    # dwell/mouth 공용 hover 추적 - hover_to_commit_ms 계산용.
+    # hovered_key가 바뀔 때만 시작 시각을 갱신하고, tap_commit이 발생하면
+    # 다음 사이클과 섞이지 않도록 즉시 리셋한다.
+    hover_start_ts_ms = None
+    hover_start_key = None
+
+    if keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN:
+        buttonList = create_cheonjiin_buttons()
+    else:
+        buttonList = create_buttons(keys_kor_normal)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
@@ -588,6 +826,7 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
         f"Eye Keyboard 시작 [mode={mode}] | "
         "r: 재캘리브레이션/리셋 | "
         "t: 시선정확도테스트(calibrated 전용) | "
+        "y: 10회 타겟팅 테스트 | "
         "m: 입벌림 입력 방식 변경 | "
         "p/h/g/o: 매핑 방식 전환(calibrated 전용) | "
         "b: 후보 마커 토글 | "
@@ -620,6 +859,8 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
 
             if not ret:
                 break
+
+            frame_id += 1
 
             frame = cv2.flip(frame, 1)
 
@@ -770,8 +1011,11 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                     )
 
                         print(f"[baseline] 저장 완료: {saved_path}")
+                        append_mouth_baseline_history(run_id, saved_path)
                         mouth = MouthClickDetector()
                         dwell.reset()
+                        hover_start_ts_ms = None
+                        hover_start_key = None
 
                     instruction = mouth_calibrator.get_instruction()
                     remaining = mouth_calibrator.get_remaining_time()
@@ -852,6 +1096,154 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                             gaze_x,
                             gaze_y
                         )
+                # ── 독립 타겟팅 정확도 테스트 ─────────────────────
+            if targeting_mode:
+                targeting_attempt = None
+
+                if targeting_runner.active:
+                    inside_target = (
+                        tracking_valid
+                        and targeting_runner.is_inside_target(
+                            gaze_x,
+                            gaze_y
+                        )
+                    )
+
+                    # 타겟 안을 바라볼 때만 가상의 "target" 영역으로
+                    # 입벌림 선택을 감지한다.
+                    if targeting_runner.is_preparing:
+                        mouth.reset()
+                        mouth_click = False
+                        mar = 0.0
+                    else:
+                        mouth_click, mar = mouth.update(
+                            lms,
+                            "target" if inside_target else None
+                        )
+
+                    # 타겟 안에서 1초 연속 응시하면 드웰 성공
+                    targeting_attempt = (
+                        targeting_runner.update_dwell(
+                            gaze_x,
+                            gaze_y,
+                            tracking_valid
+                        )
+                    )
+
+                    # 같은 프레임에서 드웰과 입벌림이 동시에
+                    # 두 회차를 처리하지 않도록 attempt가 없을 때만 실행
+                    if (
+                        targeting_attempt is None
+                        and mouth_click
+                        and targeting_runner.active
+                    ):
+                        targeting_attempt = (
+                            targeting_runner.register_selection(
+                                gaze_x,
+                                gaze_y
+                            )
+                        )
+
+                    if targeting_attempt is not None:
+                        result_text = (
+                            "성공"
+                            if targeting_attempt.success
+                            else "실패"
+                        )
+
+                        print(
+                            "[타겟팅]",
+                            f"{targeting_attempt.trial}/"
+                            f"{targeting_runner.total_trials}",
+                            result_text,
+                            f"({targeting_attempt.reason})",
+                            f"{targeting_attempt.reaction_time_sec:.2f}초"
+                        )
+
+                        # 10회 완료 시점(이 attempt로 completed=True가 된 프레임)에
+                        # 딱 한 번만 저장한다.
+                        if targeting_runner.completed:
+                            export_targeting_results(
+                                run_id,
+                                keyboard_layout,
+                                targeting_runner,
+                                aborted=False,
+                            )
+
+                # 10회 완료 여부에 따라 테스트 또는 결과 화면 표시
+                if targeting_runner.completed:
+                    targeting_canvas = (
+                        draw_targeting_result_screen(
+                            targeting_runner
+                        )
+                    )
+                else:
+                    targeting_canvas = (
+                        draw_targeting_test_screen(
+                            targeting_runner,
+                            gaze_x,
+                            gaze_y
+                        )
+                    )
+
+                # 진행 중에는 현재 시선 커서도 함께 표시
+                if (
+                    tracking_valid
+                    and targeting_runner.active
+                ):
+                    targeting_canvas = draw_gaze_cursor(
+                        targeting_canvas,
+                        gaze_x,
+                        gaze_y,
+                        fixation_count
+                    )
+
+                cv2.imshow(
+                    "Eye Keyboard",
+                    targeting_canvas
+                )
+
+                targeting_key = cv2.waitKey(1) & 0xFF
+
+                if targeting_key == ord('q'):
+                    break
+
+                # ESC: 타겟 테스트 종료 후 기존 키보드로 복귀
+                elif targeting_key == 27:
+                    # 이미 10회를 완료해 결과 화면에서 나가는 경우는 위에서
+                    # 이미 저장했으므로 중복 저장하지 않는다.
+                    if not targeting_runner.completed:
+                        export_targeting_results(
+                            run_id,
+                            keyboard_layout,
+                            targeting_runner,
+                            aborted=True,
+                        )
+                    targeting_mode = False
+                    targeting_runner.reset()
+                    dwell.reset()
+                    mouth.reset()
+                    hover_start_ts_ms = None
+                    hover_start_key = None
+
+                    print(
+                        "[타겟팅] 테스트 종료 → "
+                        "키보드 화면으로 복귀"
+                    )
+
+                # 결과 화면 또는 진행 중 Y 키를 누르면 처음부터 재시작
+                elif targeting_key == ord('y'):
+                    targeting_runner.start()
+                    dwell.reset()
+                    mouth.reset()
+
+                    print(
+                        "[타겟팅] 10회 테스트를 "
+                        "처음부터 다시 시작합니다."
+                    )
+
+                # 일반 키보드 입력·렌더링을 실행하지 않는다.
+                continue
 
             # ── 드웰 클릭 ─────────────────────────────────────
 
@@ -863,60 +1255,143 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
 
                 key_zoom.update(fixation_state, buttonList)
 
-                if tracking_valid:
-                    hovered_key, dwell_ratio, clicked_key = dwell.update(
-                        gaze_x,
-                        gaze_y,
-                        buttonList,
+            if tracking_valid:
+                hovered_key, dwell_ratio, clicked_key = dwell.update(
+                    gaze_x,
+                    gaze_y,
+                    buttonList,
                         key_zoom
-                    )
+                )
 
-                    mouth_click, mar = mouth.update(
-                        lms,
-                        hovered_key
-                    )
-                else:
-                    dwell.reset()
-                    hovered_key = None
-                    clicked_key = None
-                    dwell_ratio = 0.0
-                    mouth_click = False
-                    mar = 0.0
+                mouth_click, mar = mouth.update(
+                    lms,
+                    hovered_key
+                )
+            else:
+                dwell.reset()
+                hovered_key = None
+                clicked_key = None
+                dwell_ratio = 0.0
+                mouth_click = False
+                mar = 0.0
 
-                # 기존 드웰 클릭
-                if clicked_key:
-                    tester.on_key_press(clicked_key)
+            # hover 추적(dwell/mouth 공용) - hovered_key가 바뀔 때만 시작
+            # 시각을 새로 찍는다. tap_commit이 발생하면 아래에서 즉시
+            # 리셋해 다음 hover 사이클과 섞이지 않게 한다.
+            if hovered_key != hover_start_key:
+                hover_start_key = hovered_key
+                hover_start_ts_ms = (
+                    clock.now_ms() if hovered_key is not None else None
+                )
 
-                    (is_korean, is_shift, buttonList) = process_key(
-                        clicked_key,
-                        is_korean,
-                        is_shift,
-                        buttonList
-                    )
+            # 기존 드웰 클릭
+            if clicked_key:
+                tester.on_key_press()
 
-                # 입벌림 클릭
-                if mouth_click and hovered_key:
+                pre_tap_button_list = buttonList
+                pre_tap_target_char = (
+                    tester.get_target_char(len(hangul.finalText))
+                    if tester.active
+                    else ""
+                )
 
-                    tester.on_key_press(hovered_key)
+                (
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    deleted_count,
+                    inserted_text,
+                ) = process_key(
+                    clicked_key,
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    keyboard_layout
+                )
 
-                    (is_korean, is_shift, buttonList) = process_key(
-                        hovered_key,
-                        is_korean,
-                        is_shift,
-                        buttonList
-                    )
+                log_input_tap(
+                    input_event_logger,
+                    frame_id=frame_id,
+                    input_mode="dwell",
+                    keyboard_layout=keyboard_layout,
+                    key_id=clicked_key,
+                    button_list=pre_tap_button_list,
+                    target_char=pre_tap_target_char,
+                    hover_start_ts_ms=hover_start_ts_ms,
+                    cursor_x=gaze_x,
+                    cursor_y=gaze_y,
+                    deleted_count=deleted_count,
+                    inserted_text=inserted_text,
+                    trigger_signal=None,
+                )
+                hover_start_ts_ms = None
+                hover_start_key = None
 
-                    print("MOUTH INPUT:", hovered_key)
-                    
+            # 입벌림 클릭
+            if mouth_click and hovered_key:
+
+                tester.on_key_press()
+
+                pre_tap_button_list = buttonList
+                pre_tap_target_char = (
+                    tester.get_target_char(len(hangul.finalText))
+                    if tester.active
+                    else ""
+                )
+
+                (
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    deleted_count,
+                    inserted_text,
+                ) = process_key(
+                    hovered_key,
+                    is_korean,
+                    is_shift,
+                    buttonList,
+                    keyboard_layout
+                )
+
+                log_input_tap(
+                    input_event_logger,
+                    frame_id=frame_id,
+                    input_mode="mouth",
+                    keyboard_layout=keyboard_layout,
+                    key_id=hovered_key,
+                    button_list=pre_tap_button_list,
+                    target_char=pre_tap_target_char,
+                    hover_start_ts_ms=hover_start_ts_ms,
+                    cursor_x=gaze_x,
+                    cursor_y=gaze_y,
+                    deleted_count=deleted_count,
+                    inserted_text=inserted_text,
+                    trigger_signal=mar,
+                )
+                hover_start_ts_ms = None
+                hover_start_key = None
+
+                print("MOUTH INPUT:", hovered_key)
+
 
             # ── 렌더링 ────────────────────────────────────────
 
             kbd_bg = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
             kbd_bg[:] = (245, 246, 248)
 
+            pending_cheonjiin_text = ""
+            if (
+                keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+                and is_korean
+            ):
+                pending_cheonjiin_text = (
+                    cheonjiin_composer.get_pending_preview()
+                )
+
             current_text = (
-                hangul.finalText +
-                hangul.compose_jamo_buffer()
+                hangul.finalText
+                + hangul.compose_jamo_buffer()
+                + pending_cheonjiin_text
             )
 
             target = tester.target_text if tester.active else None
@@ -952,7 +1427,6 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                             input_metrics["average_cursor_speed_px_sec"]
                         )
                     )
-                
 
                     collector.end_session()
 
@@ -969,13 +1443,16 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                        
                         ),
                         export_session=True,
-                        export_accuracy=False
+                        export_accuracy=False,
+                        export_reason=MetricsCollector.EXPORT_REASON_SENTENCE_COMPLETED
                     )
 
                     print(
                         "[metrics] 입력 및 세션 지표 저장 완료: "
                         f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
                     )
+
+                    session_exported = True
 
                 hangul.finalText = ""
                 hangul.jamo_buffer[:] = ['', '', '']
@@ -1346,6 +1823,23 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
 
                 print("입벌림 캘리브레이션 시작")
 
+            elif key == ord('y'):
+                targeting_runner.start()
+                targeting_mode = True
+
+                dwell.reset()
+                mouth.reset()
+                hover_start_ts_ms = None
+                hover_start_key = None
+
+                print()
+                print("===== 타겟팅 정확도 테스트 시작 =====")
+                print("총 10개의 원형 타겟을 순서대로 측정합니다.")
+                print("원 안을 1초간 응시하거나 입벌림으로 선택하세요.")
+                print("ESC: 키보드 복귀 | Y: 다시 시작")
+                print("====================================")
+                print()
+
             elif key == ord('t'):
 
                  if mode != MODE_CALIBRATED:
@@ -1368,10 +1862,26 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                     else:
                         version_name = f"v0.3-raw-mean{GAZE_AVG_WINDOW}"
 
+                    # config_hash/config_json은 main() 시작 시점에 이미 계산돼
+                    # 있다(앱 실행 시작 시점 안전망 고정 참고) — 여기서는 재사용만 한다.
+
                     collector = MetricsCollector(
-                        user_id="yejin",
+                        user_id=user_id,
                         dev_version=version_name,
                         px_per_cm=PX_PER_CM,
+                        run_id=run_id,
+                        keyboard_layout=keyboard_layout,
+                        config_hash=config_hash,
+                        config_json=config_json,
+                        t0_utc=clock.t0_utc_iso(),
+                        screen_w=SCREEN_W,
+                        screen_h=SCREEN_H,
+                        monitor_diagonal_inch=MONITOR_DIAGONAL_INCH,
+                        # ridge_enabled/backbone_enabled: config 값이 아니라 이
+                        # 프로세스에서 선택 기능이 실제로 활성화됐는지(=필요한
+                        # 라이브러리를 import할 수 있었는지)를 담는다.
+                        ridge_enabled=mapper.calibrator.ridge.sklearn_available(),
+                        backbone_enabled=backbone.available,
 
                         # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
                         calib_id=(
@@ -1388,19 +1898,19 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                         smoothing_mode="moving_average",
 
                         edge_mean_reproj_error_px=(
-                            calibrator.edge_mean_reproj_error_px
+                            mapper.calibrator.edge_mean_reproj_error_px
                         ),
                         center_mean_reproj_error_px=(
                             mapper.calibrator.center_mean_reproj_error_px
                         ),
                         calibration_fallback_used=(
-                            calibrator.calibration_fallback_used
+                            mapper.calibrator.calibration_fallback_used
                         ),
                         rejected_calib_rmse_px=(
                             mapper.calibrator.rejected_calib_rmse_px
                         ),
                         applied_calib_rmse_px=(
-                            calibrator.applied_calib_rmse_px
+                            mapper.calibrator.applied_calib_rmse_px
                         ),
                     )
 
@@ -1417,16 +1927,83 @@ def main(mode=MODE_CALIBRATED, strategy_name=None):
                         backbone=backbone
                     )
 
-                    last_session_id = collector.session_id
+                    last_test_id = collector.test_id
+
+    # ── 세션 지표 종료 시점 안전망 ──
+    # sessions.csv는 원래 문장 입력 테스트를 정확히 완료했을 때만 기록됐다.
+    # 'q'로 조기 종료하는 등 완료 없이 프로그램이 끝나면 정확도 테스트를
+    # 시작했더라도(=collector 생성됨) 세션 행이 통째로 유실됐다
+    # (targeting_results가 aborted=True로 완료분을 남기는 것과 달리, sessions는
+    # 유실 시 아무 로그도 남기지 않는 조용한 실패였다). sessions는 "앱 실행
+    # 1회"의 메타데이터이므로 9점 테스트를 아예 시작하지 않아 collector가
+    # 없는 실행도 예외가 아니다 — 이 경우 세션 레벨 메타데이터만 담은
+    # collector를 즉석에서 만들어 마지막으로 한 번 기록한다.
+    if not session_exported:
+        out_dir = "gaze_accuracy_results"
+
+        if collector is not None:
+            export_reason = MetricsCollector.EXPORT_REASON_APP_EXIT
+            exit_collector = collector
+        else:
+            export_reason = MetricsCollector.EXPORT_REASON_NO_TEST
+            exit_collector = MetricsCollector(
+                user_id=user_id,
+                run_id=run_id,
+                keyboard_layout=keyboard_layout,
+                config_hash=config_hash,
+                config_json=config_json,
+                t0_utc=clock.t0_utc_iso(),
+                screen_w=SCREEN_W,
+                screen_h=SCREEN_H,
+                monitor_diagonal_inch=MONITOR_DIAGONAL_INCH,
+                ridge_enabled=(
+                    mapper.calibrator.ridge.sklearn_available()
+                    if hasattr(mapper, "calibrator")
+                    else None
+                ),
+                backbone_enabled=backbone.available,
+            )
+            # 9점 테스트가 없었던 실행이므로 __init__이 발급한 test_id는
+            # 실제로 일어나지 않은 테스트를 가리키게 된다 — 결측으로 남긴다.
+            exit_collector.test_id = None
+
+        try:
+            exit_collector.export_csv(
+                sessions_path=os.path.join(
+                    out_dir,
+                    f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
+                ),
+                accuracy_path=os.path.join(
+                    out_dir,
+                    f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv"
+                ),
+                export_session=True,
+                export_accuracy=False,
+                export_reason=export_reason
+            )
+        except Exception as exc:
+            print(
+                "[metrics][경고] 종료 시점 세션 지표 저장 실패 — sessions 행이 "
+                f"기록되지 않았습니다({export_reason}): {exc}"
+            )
+        else:
+            print(
+                f"[metrics] 종료 시점 세션 지표 저장 완료({export_reason}): "
+                f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
+            )
+
+            if collector is not None and last_test_id is None:
+                last_test_id = collector.test_id
 
     session_logger.close()
+    input_event_logger.close()
 
     cap.release()
     cv2.destroyAllWindows()
 
     # ── 종료 시 마지막 세션 결과 팝업 (측정한 적 있을 때만) ──
-    if last_session_id is not None:
-        show_session_popup(last_session_id)
+    if last_test_id is not None:
+        show_session_popup(last_test_id)
 
 
 def _parse_args():
@@ -1457,6 +2034,31 @@ def _parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--keyboard-layout",
+        dest="keyboard_layout",
+        choices=[
+            KEYBOARD_LAYOUT_QWERTY,
+            KEYBOARD_LAYOUT_CHEONJIIN,
+        ],
+        default=KEYBOARD_LAYOUT_QWERTY,
+        help=(
+            "키보드 배열. 'qwerty'는 기존 쿼티 배열이며, "
+            "'cheonjiin'은 천지인 3×4 배열을 사용한다."
+        ),
+    )
+
+    parser.add_argument(
+        "--user-id",
+        dest="user_id",
+        default="yejin",
+        help=(
+            "sessions.csv 등에 기록될 참가자 식별자. 팀원별로 실행 결과를 "
+            "구분하려면 실행 시 지정한다(기본값은 기존 동작과 동일하게 "
+            "'yejin' 고정값을 유지)."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -1468,9 +2070,25 @@ def _parse_args():
                 f"사용 가능한 strategy: {available}"
             )
 
-    return args.gaze_mode, args.strategy
+    return (
+        args.gaze_mode,
+        args.strategy,
+        args.keyboard_layout,
+        args.user_id
+    )
 
 
 if __name__ == "__main__":
-    _mode, _strategy_name = _parse_args()
-    main(mode=_mode, strategy_name=_strategy_name)
+    (
+        _mode,
+        _strategy_name,
+        _keyboard_layout,
+        _user_id
+    ) = _parse_args()
+
+    main(
+        mode=_mode,
+        strategy_name=_strategy_name,
+        keyboard_layout=_keyboard_layout,
+        user_id=_user_id
+    )
