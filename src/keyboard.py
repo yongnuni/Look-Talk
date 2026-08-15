@@ -516,11 +516,58 @@ def create_buttons(keys):
     return character_buttons + function_buttons + [confirm_button]
 
 
+def _composite_text(is_korean, keyboard_layout):
+    """finalText + compose_jamo_buffer() + (해당 시) 천지인 pending preview.
+
+    main.py가 화면에 그리는 current_text와 동일한 조합이다. process_key()
+    호출 전/후로 이 값을 스냅샷해 tap 1회의 변화(diff)를 계산하는 기준으로
+    쓴다. pending preview를 빼면 ㆍ 단독 탭처럼 아직 완성된 모음이 안 된
+    입력이 빈 diff로 유실된다.
+    """
+    from src import hangul
+
+    text = hangul.finalText + hangul.compose_jamo_buffer()
+
+    if (
+        keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+        and is_korean
+    ):
+        text += cheonjiin_composer.get_pending_preview()
+
+    return text
+
+
+def _diff_tail(before, after):
+    """before -> after 변화를 "꼬리에서 지운 개수 + 꼬리에 붙인 문자열"로 표현한다.
+
+    공통 접두사 뒤부터를 diff로 잡는다. 이 코드베이스의 소급 변경(hangul
+    flush_buffer, 천지인 _replace_last_vowel, 백스페이스)은 전부 문자열
+    꼬리에서만 일어나므로(조사 결과 확인됨), 그 전제 하에서 deleted_count/
+    inserted_text만으로 after를 정확히 재구성할 수 있다:
+    after == before[:len(before) - deleted_count] + inserted_text
+    """
+    common_len = 0
+    max_common = min(len(before), len(after))
+
+    while (
+        common_len < max_common
+        and before[common_len] == after[common_len]
+    ):
+        common_len += 1
+
+    deleted_count = len(before) - common_len
+    inserted_text = after[common_len:]
+
+    return deleted_count, inserted_text
+
+
 def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):
     from src import hangul
     is_cheonjiin = (
         keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
     )
+
+    composite_before = _composite_text(is_korean, keyboard_layout)
 
     if (
         is_cheonjiin
@@ -538,10 +585,17 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
                 f"[천지인] {key} → {emitted_jamo}"
             )
 
+        deleted_count, inserted_text = _diff_tail(
+            composite_before,
+            _composite_text(is_korean, keyboard_layout)
+        )
+
         return (
             is_korean,
             is_shift,
-            buttonList
+            buttonList,
+            deleted_count,
+            inserted_text
         )
     # 아직 화면에 나타나지 않은 ㆍ 입력은
     # 되돌리기를 한 번 눌러 취소할 수 있다.
@@ -553,10 +607,17 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
         ):
         print("[천지인] 미완성 모음 입력 취소")
 
+        deleted_count, inserted_text = _diff_tail(
+            composite_before,
+            _composite_text(is_korean, keyboard_layout)
+        )
+
         return (
             is_korean,
             is_shift,
-            buttonList
+            buttonList,
+            deleted_count,
+            inserted_text
             )
 
     # 스페이스, 한/영, 확인, 되돌리기 등 기능키를 선택하면
@@ -567,7 +628,11 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
     if key == "확인":
         # 추후 메시지 전송(제출) 기능 연결 예정 — 현재는 placeholder.
         # 입력 문장을 건드리지 않고, 기존 Enter의 검색 실행 기능과도 무관하다.
-        return (is_korean, is_shift, buttonList)
+        deleted_count, inserted_text = _diff_tail(
+            composite_before,
+            _composite_text(is_korean, keyboard_layout)
+        )
+        return (is_korean, is_shift, buttonList, deleted_count, inserted_text)
 
     if is_korean:
 
@@ -700,10 +765,17 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
                 keys_eng_normal
             )
 
+    deleted_count, inserted_text = _diff_tail(
+        composite_before,
+        _composite_text(is_korean, keyboard_layout)
+    )
+
     return (
         is_korean,
         is_shift,
-        buttonList
+        buttonList,
+        deleted_count,
+        inserted_text
     )
 
 def get_button_center(buttonList, key_name):

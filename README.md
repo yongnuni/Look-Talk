@@ -27,6 +27,14 @@ python -m pip install pillow
 
 python -m pip install jamo
 
+<릿지>
+
+pip install scikit-learn
+
+<백본>
+
+pip install torch torchvision onnx onnxruntime huggingface_hub
+
 ## 폴더 구조
 
 ```
@@ -100,8 +108,31 @@ tests/
 └── test_sentences.py                 # 테스트용 문장 목록 (현재 2개: "안녕하세요", "감사합니다")
 ```
 
-<릿지>
-pip install scikit-learn
+## 배포 실행 가이드 (팀원용 초안)
 
-<백본>
-pip install torch torchvision onnx onnxruntime huggingface_hub
+분산 테스트를 위해 각자 컴퓨터에서 실행할 때 아래 설정 확인 바람.
+
+### 1. 실행 전 설정
+
+- **모니터 크기**: `src/config.py`의 `MONITOR_DIAGONAL_INCH`를 자기 모니터의 대각선 인치로 수정한다(위 requirement 섹션 참고). px→cm 환산(`PX_PER_CM`)이 이 값에서 파생되므로, 안 맞추면 정확도 지표(cm 단위)가 왜곡된다.
+- **참가자 식별자(user_id)**: 기본값은 `yejin`으로 고정돼 있다. 다른 사람이 실행한 결과를 구분하려면 실행 시 `--user-id` 옵션을 지정한다:
+  ```
+  python main.py --user-id <자기이름>
+  ```
+  지정하지 않으면 sessions.csv 등 모든 로그에 `yejin`으로 기록되니, 팀원별 결과를 CSV 하나에서 구분해야 한다면 반드시 지정한다.
+
+### 2. 실행 순서
+
+```
+python main.py [--keyboard-layout qwerty|cheonjiin] [--user-id <이름>]
+```
+
+1. 캘리브레이션 화면에서 16점을 순서대로 응시(캘리브레이션 자동 진행)
+2. 캘리브레이션 완료 후 나오는 가상 키보드로 화면 상단에 표시된 목표 문장을 끝까지 입력(dwell 또는 입벌림 클릭으로 키 선택, 백스페이스 포함해도 무방 — 오히려 오타율 지표 수집에 도움이 됨)
+3. `t`: 9점 시선 정확도 테스트 실행(캘리브레이션된 모드에서만 동작)
+4. `y`: (선택) 10회 원형 타겟팅 테스트 실행/재시작. `ESC`로 중도 종료 가능
+5. `q`: 앱 종료 — 이 시점에 sessions.csv 등 세션 메타데이터가 항상 저장된다(9점 테스트를 아예 안 했어도, 문장을 끝까지 안 쳤어도 저장됨)
+
+### 3. 결과 제출
+
+`gaze_accuracy_results/`와 `calibration_results/`(baseline.json 계열) 폴더 전체를 CSV/JSON 그대로 제출한다. 개별 파일을 골라내지 말고 폴더째 보내는 편이 안전하다.(append 누적 파일이라 실행 여러 번 섞여 있어도 run_id로 나중에 구분 가능)

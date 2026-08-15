@@ -56,8 +56,7 @@ CALIB_POINTS = [
     (_T,               _T),
 ]
 
-CALIB_HOLD_SEC = 2.0
-SMOOTH_ALPHA = 0.20
+SMOOTH_ALPHA = 0.35  # 실측 동작값. 변경 시 시선 안정성 지표 baseline이 달라짐
 GAZE_AVG_WINDOW = 3
 COUNTDOWN_SEC = 3
 DWELL_SEC = 1.2

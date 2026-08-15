@@ -2,9 +2,9 @@ import cv2
 import numpy as np
 import os
 import time
-import uuid
 
 from src.metrics.csv_export import append_rows
+from src.common import ids
 from src.config import (
     CALIB_POINTS,
     SCREEN_W,
@@ -164,10 +164,30 @@ class PolyRidgeMapper:
 
         return float(out[0]), float(out[1])
 
+    def sklearn_available(self):
+        """scikit-learn을 실제로 import해서 쓸 수 있는지 확인한다.
+
+        fit()이 이미 실행돼 _impl이 정해져 있으면 그 결과를 그대로 참조한다
+        (fit() 안의 try/except가 실제로 어느 경로를 탔는지가 가장 정확한 답이므로).
+        아직 fit()이 실행되지 않았다면(샘플 부족 등) fit()과 동일한 import를
+        독립적으로 시도해 판단한다 — 두 경로의 판정 기준이 어긋나지 않도록
+        fit()의 sklearn import 문과 동일하게 맞춰 둔다.
+        """
+        if self._impl is not None:
+            return self._impl == "sklearn"
+
+        try:
+            from sklearn.pipeline import make_pipeline  # noqa: F401
+            from sklearn.preprocessing import StandardScaler, PolynomialFeatures  # noqa: F401
+            from sklearn.linear_model import Ridge  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
 
 class Calibrator:
 
-    CALIB_SCHEMA_VERSION = "1.3"
+    CALIB_SCHEMA_VERSION = "1.4"
 
     def __init__(self):
         # 마지막으로 품질 기준을 통과한 Homography 보관
@@ -175,7 +195,15 @@ class Calibrator:
         self.last_good_H = None
         self.last_good_calib_rmse_px = None
         self.last_good_calib_id = None
+        # run_id: 앱 실행 1회 식별자. main.py가 set_run_id()로 주입한다.
+        # reset()은 캘리브레이션 단위 상태(calib_id 등)만 재발급하고,
+        # run_id는 앱 실행 동안 고정이므로 reset() 안에서 건드리지 않는다.
+        self.run_id = None
         self.reset()
+
+    def set_run_id(self, run_id):
+        """main.py가 앱 실행 1회 식별자를 주입한다. reset()과 무관하게 유지된다."""
+        self.run_id = run_id
 
     def reset(self):
 
@@ -199,7 +227,7 @@ class Calibrator:
 
         self.point_records = []
         self.point_retry_counts = {}
-        self.calib_id = str(uuid.uuid4())
+        self.calib_id = ids.new_calib_id()
         self.calib_reproj_rmse_px = None
         self.ridge_reproj_rmse_px = None
         self.calibration_fallback_used = False
@@ -1132,6 +1160,7 @@ class Calibrator:
         )
 
         fieldnames = [
+            "run_id",
             "calib_id",
             "calib_point_index",
             "point_x_norm",
@@ -1152,6 +1181,7 @@ class Calibrator:
 
         rows = [
             {
+                "run_id": self.run_id,
                 "calib_id": self.calib_id,
                 "calib_point_index": rec["calib_point_index"],
                 "point_x_norm": rec["point_x_norm"],

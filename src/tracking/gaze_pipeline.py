@@ -184,7 +184,7 @@ class GazePipeline:
         sx_s = float(estimated[0][0])
         sy_s = float(estimated[1][0])
 
-        alpha = 0.35
+        alpha = SMOOTH_ALPHA
 
         if self.last_output is None:
         # 첫 유효 좌표는 비교할 이전 좌표가 없으므로 그대로 사용
