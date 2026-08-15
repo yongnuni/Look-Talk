@@ -48,22 +48,23 @@ KEY_FONT_BASE_SIZE = max(18, int(LAYOUT["row_h"] * 0.42))
 
 key_font = ImageFont.truetype(FONT_PATH, KEY_FONT_BASE_SIZE)
 
-# 확대된 키는 라벨도 같이 커져야 하므로 크기별로 캐싱해 둔다.
-_key_font_cache = {KEY_FONT_BASE_SIZE: key_font}
+FUNCTION_KEY_FONT_BASE_SIZE = max(20, int(LAYOUT["row_h"] * 0.30))
+function_key_font = ImageFont.truetype(FONT_PATH, FUNCTION_KEY_FONT_BASE_SIZE)
+
+# 확대된 키는 라벨도 같이 커져야 하므로 (기준 크기, 배율)별로 캐싱해 둔다.
+_key_font_cache = {
+    KEY_FONT_BASE_SIZE: key_font,
+    FUNCTION_KEY_FONT_BASE_SIZE: function_key_font,
+}
 
 
-def _key_font_for(scale):
-    size = max(12, int(KEY_FONT_BASE_SIZE * scale))
+def _key_font_for(scale, base_size=KEY_FONT_BASE_SIZE):
+    size = max(12, int(base_size * scale))
     cached = _key_font_cache.get(size)
     if cached is None:
         cached = ImageFont.truetype(FONT_PATH, size)
         _key_font_cache[size] = cached
     return cached
-
-function_key_font = ImageFont.truetype(
-    FONT_PATH,
-    max(20, int(LAYOUT["row_h"] * 0.30))
-)
 
 
 # ── 카운트다운 ────────────────────────────────────────────────
@@ -541,18 +542,18 @@ def drawAll(
 
         label = DISPLAY_LABELS.get(key, key)
 
-        current_key_font = (
-            function_key_font
+        base_font_size = (
+            FUNCTION_KEY_FONT_BASE_SIZE
             if getattr(button, "font_role", "default") == "function_small"
-            else key_font
+            else KEY_FONT_BASE_SIZE
         )
 
-        label_font = _key_font_for(zoom_scale)
+        label_font = _key_font_for(zoom_scale, base_font_size)
 
         bbox = draw.textbbox(
             (0, 0),
             label,
-            font=current_label_font
+            font=label_font
         )
 
         text_w = bbox[2] - bbox[0]
@@ -564,7 +565,7 @@ def drawAll(
         draw.text(
             (text_x, text_y),
             label,
-            font=current_key_font,
+            font=label_font,
             fill=text_color
         )
 
