@@ -697,7 +697,7 @@ def log_input_tap(
     )
 
 
-def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):
+def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY,user_id="yejin"):
     # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
     clock.init()
@@ -1272,7 +1272,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
             # 기존 드웰 클릭
             if clicked_key:
-                tester.on_key_press(clicked_key)
+                tester.on_key_press()
 
                 pre_tap_button_list = buttonList
                 pre_tap_target_char = (
@@ -1316,7 +1316,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
             # 입벌림 클릭
             if mouth_click and hovered_key:
 
-                tester.on_key_press(hovered_key)
+                tester.on_key_press()
 
                 pre_tap_button_list = buttonList
                 pre_tap_target_char = (
@@ -1413,7 +1413,6 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                             input_metrics["average_cursor_speed_px_sec"]
                         )
                     )
-                
 
                     collector.end_session()
 
@@ -1845,7 +1844,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                     # 있다(앱 실행 시작 시점 안전망 고정 참고) — 여기서는 재사용만 한다.
 
                     collector = MetricsCollector(
-                        user_id="yejin",
+                        user_id=user_id,
                         dev_version=version_name,
                         px_per_cm=PX_PER_CM,
                         run_id=run_id,
@@ -1926,6 +1925,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
         else:
             export_reason = MetricsCollector.EXPORT_REASON_NO_TEST
             exit_collector = MetricsCollector(
+                user_id=user_id,
                 run_id=run_id,
                 keyboard_layout=keyboard_layout,
                 config_hash=config_hash,
@@ -2026,6 +2026,17 @@ def _parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--user-id",
+        dest="user_id",
+        default="yejin",
+        help=(
+            "sessions.csv 등에 기록될 참가자 식별자. 팀원별로 실행 결과를 "
+            "구분하려면 실행 시 지정한다(기본값은 기존 동작과 동일하게 "
+            "'yejin' 고정값을 유지)."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -2040,7 +2051,8 @@ def _parse_args():
     return (
         args.gaze_mode,
         args.strategy,
-        args.keyboard_layout
+        args.keyboard_layout,
+        args.user_id
     )
 
 
@@ -2048,11 +2060,13 @@ if __name__ == "__main__":
     (
         _mode,
         _strategy_name,
-        _keyboard_layout
+        _keyboard_layout,
+        _user_id
     ) = _parse_args()
 
     main(
         mode=_mode,
         strategy_name=_strategy_name,
-        keyboard_layout=_keyboard_layout
+        keyboard_layout=_keyboard_layout,
+        user_id=_user_id
     )

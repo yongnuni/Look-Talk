@@ -20,9 +20,6 @@ class TestRunner:
 
         self.session_start = None
 
-        self.keystrokes = 0
-        self.backspace_count = 0
-
         self.reaction_times = []
         self.last_key_time = None
 
@@ -60,18 +57,13 @@ class TestRunner:
 
         self.previous_cursor_position = current_position
 
-    def on_key_press(self, key):
+    def on_key_press(self):
 
         now = time.time()
 
         if self.session_start is None:
             self.session_start = now
             self.previous_cursor_position = None
-
-        self.keystrokes += 1
-
-        if key == "Del":
-            self.backspace_count += 1
 
         if self.last_key_time is not None:
             self.reaction_times.append(
@@ -93,8 +85,6 @@ class TestRunner:
         print("===== 테스트 완료 =====")
         print("목표:", self.target_text)
         print("입력:", current_text)
-        print("키 입력:", self.keystrokes)
-        print("백스페이스:", self.backspace_count)
 
         self.saved = True
         self.complete_time = time.time()

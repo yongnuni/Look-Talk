@@ -19,6 +19,7 @@ from src.keyboard import (
     keys_kor_normal,
     create_buttons,
 )
+from src.metrics.derive_input import replay_deltas as _replay
 
 
 @pytest.fixture(autouse=True)
@@ -42,22 +43,6 @@ def _cheonjiin_composite():
         + hangul.compose_jamo_buffer()
         + cheonjiin_composer.get_pending_preview()
     )
-
-
-def _replay(diffs):
-    """tap_commit 행들의 (deleted_count, inserted_text) 시퀀스를 재생해
-    최종 문자열을 복원한다. InputEventLogger가 기록하는 형식 그대로다.
-    """
-    composite = ""
-    for deleted_count, inserted_text in diffs:
-        if deleted_count > 0:
-            composite = (
-                composite[:-deleted_count]
-                if deleted_count <= len(composite)
-                else ""
-            )
-        composite += inserted_text
-    return composite
 
 
 # ── _diff_tail 자체 (순수 함수) ──────────────────────────────────

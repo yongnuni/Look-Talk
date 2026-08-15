@@ -57,6 +57,7 @@ from src.metrics.collector import MetricsCollector
 from src.tracking.calibration import Calibrator
 from src.metrics.session_logger import SessionLogger
 from src.metrics.input_event_logger import InputEventLogger
+from src.metrics.derive_input import replay_deltas as _replay_tail_diffs
 
 CONFIG_HASH_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -201,26 +202,6 @@ def check_unlinked_run_ids(frames):
         return None
 
     return not any_unlinked
-
-
-def _replay_tail_diffs(rows):
-    """(deleted_count, inserted_text) 시퀀스를 재생해 최종 문자열을 복원한다.
-
-    src/keyboard.py의 _diff_tail이 만드는 형식과 동일하다: after ==
-    before[:len(before)-deleted_count] + inserted_text.
-    """
-    composite = ""
-    for deleted_count, inserted_text in rows:
-        deleted_count = int(deleted_count) if pd.notna(deleted_count) else 0
-        inserted_text = str(inserted_text) if pd.notna(inserted_text) else ""
-        if deleted_count > 0:
-            composite = (
-                composite[:-deleted_count]
-                if deleted_count <= len(composite)
-                else ""
-            )
-        composite += inserted_text
-    return composite
 
 
 def check_input_events(frames, target_run_id):

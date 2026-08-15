@@ -8,8 +8,8 @@ __pycache__/
 .vscode/
 .claude/
 CLAUDE.md
-.calibration_results/
-.gaze_accuracy_results/
+calibration_results/
+gaze_accuracy_results/
 .report/
 .env
 /docs

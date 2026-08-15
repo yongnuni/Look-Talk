@@ -21,7 +21,7 @@ from src.common import ids
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.6"
+    SCHEMA_VERSION = "1.8"
 
     def __init__(
             self,
