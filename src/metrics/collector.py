@@ -262,15 +262,19 @@ class MetricsCollector:
     def end_session(self):
         self.end_timestamp = datetime.now(timezone.utc).isoformat()
 
-    # sessions 행은 두 경로에서 온다 — 문장 입력 테스트를 끝까지 완료했을 때
-    # (main.py의 tester.check_complete 분기)와, 완료 없이 프로그램이 종료돼
-    # 안전망이 대신 저장했을 때(app_exit). 이 둘을 구분하지 않으면 후자의
-    # input_duration_sec 등 결측 행이 완주 행과 섞여 입력 지표 집계를 왜곡한다.
+    # sessions 행은 세 경로에서 온다 — 문장 입력 테스트를 끝까지 완료했을 때
+    # (main.py의 tester.check_complete 분기), 9점 테스트는 시작했지만 완료 없이
+    # 프로그램이 종료돼 안전망이 대신 저장했을 때(app_exit), 9점 테스트 자체를
+    # 시작하지 않아 collector가 아예 없던 실행이 종료돼 세션 레벨 메타데이터만
+    # 저장했을 때(no_test). 이 셋을 구분하지 않으면 후자들의 input_duration_sec/
+    # test_id 등 결측 행이 완주 행과 섞여 입력 지표 집계를 왜곡한다.
     EXPORT_REASON_SENTENCE_COMPLETED = "sentence_completed"
     EXPORT_REASON_APP_EXIT = "app_exit"
+    EXPORT_REASON_NO_TEST = "no_test"
     _VALID_EXPORT_REASONS = (
         EXPORT_REASON_SENTENCE_COMPLETED,
         EXPORT_REASON_APP_EXIT,
+        EXPORT_REASON_NO_TEST,
     )
 
     def export_csv(

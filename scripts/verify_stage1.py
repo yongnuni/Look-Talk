@@ -11,24 +11,38 @@
 
 검사 항목
 0. 필수 파일(sessions, gaze_accuracy)이 존재하는가 - 없으면 스킵이 아니라 실패
-1. 대상 run_id 하나를 골라(기본: sessions.t0_utc가 가장 늦은 실행, --run-id로
-   직접 지정 가능) 각 파일에 그 run_id의 행이 있는지 확인
+1. 대상 run_id 하나를 골라(기본: mapper_session_log의 마지막 행 run_id, --run-id로
+   직접 지정 가능) 각 파일에 그 run_id의 행이 있는지 확인 - sessions에 없으면
+   "미수행"이 아니라 기록 누락(실패)으로 본다
 2. sessions.calib_id <-> calibration_quality.calib_id 조인이 성립하는가
 3. sessions.config_hash가 비어 있지 않고 12자 hex인가
 4. mapper_session_log의 ts_ms가 (run_id 그룹 내에서) 단조 증가하는가
-5. 고아 run_id 확인 - mapper_session_log 외 파일에 mapper_session_log에는 없는
+5. 미연결 run_id 확인 - mapper_session_log 외 파일에 mapper_session_log에는 없는
    run_id가 있으면 배선 누락 신호로 보고
+6. input_events(2단계) - 대상 run에서 (ts_ms, event_seq) 정렬 유효성, 천지인
+   탭이 있으면 tap 수 >= 최종 문자 수(replay 기반), 동일 frame_id 중복 행 수를
+   관측치로 보고(Hook A/B 이중 발화 - 실패 조건 아님)
 
 sessions/gaze_accuracy는 MetricsCollector가 매 실행마다 반드시 만들어야 하는
 필수 산출물이라 파일 자체가 없으면 실패로 처리한다. CSV는 append 누적이라
 여러 번의 실행 결과가 한 파일에 섞여 있고, 실행마다 어디까지 진행했는지
 (캘리만 함/9점까지/타겟팅까지)가 다르므로 "모든 파일에 공통 존재하는 run_id"를
-찾는 방식은 정상 상황도 실패로 오판한다. 그래서 검사 1은 "run_id 1개를 골라 그 실행에서 무엇을 했는지"를 확인하는
-방식으로 바꿨다. 대상 run_id는 sessions.csv에서 뽑으므로(t0_utc 최신값) sessions
-존재는 선택 방법 자체가 보장한다. mapper_session_log는 main.py 메인 루프에
-진입하면 매 프레임 무조건 기록되므로(collector 존재 여부와 무관), 대상 run_id가
-거기 없다는 것은 로깅이 실제로 깨졌다는 뜻이라 필수로 둔다. 나머지
-(calibration_quality/gaze_accuracy/targeting_results/mouth_baseline_history)는
+찾는 방식은 정상 상황도 실패로 오판한다. 그래서 검사 1은 "run_id 1개를 골라 그
+실행에서 무엇을 했는지"를 확인하는 방식으로 바꿨다.
+
+대상 run_id는 mapper_session_log의 마지막 행에서 뽑는다. sessions.t0_utc 최신값
+기준으로 고르던 이전 방식은, sessions 행 자체가 누락된 실행(예: 9점 테스트를
+전혀 시작하지 않아 sessions.csv에 그 실행의 행이 없는 경우 - 과거 실제 발생)에서
+후보 집합 자체가 그 실행을 건너뛰어 엉뚱한 이전 실행을 대상으로 골랐다. 이러면
+sessions 누락이라는 진짜 문제는 검사 대상에서 아예 빠져 조용히 통과됐다.
+mapper_session_log는 main.py 메인 루프에 진입하면 collector/sessions 기록
+여부와 무관하게 매 프레임 무조건 append로 기록되므로, 파일의 마지막 행이 항상
+가장 최근에 종료된 실행을 가리킨다(단일 프로세스가 순차 실행한다는 전제 하에
+append-only 파일이 시간 순서를 보존함). 그래서 mapper_session_log를 필수로 두고
+선택 기준 자체로 삼는다. 이렇게 고른 run_id가 sessions에 없으면 - 대상 선정
+방법이 더 이상 sessions 존재를 보장하지 않으므로 - "미수행"이 아니라 sessions
+기록 누락(실패)으로 본다(검사 1, REQUIRED_FOR_TARGET_RUN에 sessions 포함).
+나머지(calibration_quality/gaze_accuracy/targeting_results/mouth_baseline_history)는
 없으면 "미수행"으로만 표시하고 통과 처리한다.
 """
 
@@ -42,6 +56,7 @@ import pandas as pd
 from src.metrics.collector import MetricsCollector
 from src.tracking.calibration import Calibrator
 from src.metrics.session_logger import SessionLogger
+from src.metrics.input_event_logger import InputEventLogger
 
 CONFIG_HASH_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -74,37 +89,33 @@ def check_required_files(frames, required_labels):
 REQUIRED_FOR_TARGET_RUN = ["sessions", "mapper_session_log"]
 
 
-def select_target_run_id(sessions_df, explicit_run_id):
+def select_target_run_id(session_log_df, explicit_run_id):
     """검사 대상 run_id 1개를 고른다.
 
-    --run-id가 주어지면 그대로 쓰고, 아니면 sessions.csv에서 t0_utc가 가장 늦은
-    행의 run_id를 쓴다(= sessions에 존재함이 선택 방법 자체로 보장됨).
+    --run-id가 주어지면 그대로 쓰고, 아니면 mapper_session_log의 마지막 행
+    run_id를 쓴다. mapper_session_log는 main.py 메인 루프 진입 시 collector/
+    sessions 기록 여부와 무관하게 매 프레임 append로 기록되므로, 파일의 마지막
+    행이 항상 가장 최근에 종료된 실행을 가리킨다(단일 프로세스가 순차 실행한다는
+    전제 하에 append-only 파일이 시간 순서를 보존함). sessions.t0_utc 기준으로
+    고르던 이전 방식은 sessions 행 자체가 누락된 실행을 후보에서 빼버려, 그
+    누락을 검사 대상에서 조용히 제외하는 문제가 있었다.
     반환값: (run_id 또는 None, 선택 사유 설명)
     """
     if explicit_run_id:
         return explicit_run_id, "명시 지정(--run-id)"
 
-    if sessions_df is None:
-        return None, "sessions.csv 없음"
+    if session_log_df is None:
+        return None, "mapper_session_log.csv 없음"
 
-    if "run_id" not in sessions_df.columns or "t0_utc" not in sessions_df.columns:
-        return None, "sessions.csv에 run_id 또는 t0_utc 컬럼 없음"
+    if "run_id" not in session_log_df.columns:
+        return None, "mapper_session_log.csv에 run_id 컬럼 없음"
 
-    candidates = sessions_df.dropna(subset=["run_id", "t0_utc"]).copy()
+    ids_series = session_log_df["run_id"].dropna()
 
-    if candidates.empty:
-        return None, "sessions.csv에 run_id/t0_utc 값이 있는 행이 없음"
+    if ids_series.empty:
+        return None, "mapper_session_log.csv에 run_id 값이 있는 행이 없음"
 
-    candidates["_t0_parsed"] = pd.to_datetime(
-        candidates["t0_utc"], utc=True, errors="coerce"
-    )
-    candidates = candidates.dropna(subset=["_t0_parsed"])
-
-    if candidates.empty:
-        return None, "sessions.csv의 t0_utc를 시각으로 파싱할 수 없음"
-
-    latest = candidates.loc[candidates["_t0_parsed"].idxmax()]
-    return latest["run_id"], "sessions.t0_utc 최신값"
+    return ids_series.iloc[-1], "mapper_session_log 최신 run_id(마지막 행)"
 
 
 def check_target_run(frames, target_run_id, selection_note):
@@ -134,6 +145,10 @@ def check_target_run(frames, target_run_id, selection_note):
 
         if present:
             print(f"  [통과] {label}: 이 실행의 행 존재")
+        elif required and label == "sessions":
+            print(f"  [실패] {label}: 이 실행의 세션 메타데이터 행이 없음 "
+                  "(기록 누락 - 미수행이 아님, mapper_session_log에는 이 run_id가 있었음)")
+            ok = False
         elif required:
             print(f"  [실패] {label}: 이 실행의 행 없음 (필수)")
             ok = False
@@ -143,7 +158,7 @@ def check_target_run(frames, target_run_id, selection_note):
     return ok
 
 
-def check_orphan_run_ids(frames):
+def check_unlinked_run_ids(frames):
     """mapper_session_log에 없는데 다른 파일에만 존재하는 run_id를 찾는다.
 
     mapper_session_log는 main.py 메인 루프 진입 시 매 프레임 무조건 기록되므로,
@@ -152,7 +167,7 @@ def check_orphan_run_ids(frames):
     잘못 붙었다는 신호다. mapper_session_log 쪽만 있고 다른 파일에는 없는
     run_id(캘리만 하고 바로 끈 실행 등)는 정상이므로 실패로 치지 않는다.
     """
-    print("\n=== 5. 고아 run_id 확인 ===")
+    print("\n=== 5. 미연결 run_id 확인 ===")
 
     log_df = frames.get("mapper_session_log")
 
@@ -163,7 +178,7 @@ def check_orphan_run_ids(frames):
     log_ids = set(log_df["run_id"].dropna().unique())
 
     checked_any = False
-    any_orphan = False
+    any_unlinked = False
 
     for label, df in frames.items():
         if label == "mapper_session_log" or df is None or "run_id" not in df.columns:
@@ -171,13 +186,13 @@ def check_orphan_run_ids(frames):
 
         checked_any = True
         ids = set(df["run_id"].dropna().unique())
-        orphans = ids - log_ids
+        unlinked = ids - log_ids
 
-        if orphans:
-            any_orphan = True
-            preview = sorted(orphans)[:3]
-            print(f"  [실패] {label}: mapper_session_log에 없는 run_id {len(orphans)}개: "
-                  f"{preview}{' ...' if len(orphans) > 3 else ''}")
+        if unlinked:
+            any_unlinked = True
+            preview = sorted(unlinked)[:3]
+            print(f"  [실패] {label}: mapper_session_log에 대응 행이 없는 run_id "
+                  f"{len(unlinked)}개: {preview}{' ...' if len(unlinked) > 3 else ''}")
         else:
             print(f"  [통과] {label}: 전부 mapper_session_log에 존재")
 
@@ -185,7 +200,115 @@ def check_orphan_run_ids(frames):
         print("  [스킵] run_id 컬럼을 가진 다른 파일이 없음")
         return None
 
-    return not any_orphan
+    return not any_unlinked
+
+
+def _replay_tail_diffs(rows):
+    """(deleted_count, inserted_text) 시퀀스를 재생해 최종 문자열을 복원한다.
+
+    src/keyboard.py의 _diff_tail이 만드는 형식과 동일하다: after ==
+    before[:len(before)-deleted_count] + inserted_text.
+    """
+    composite = ""
+    for deleted_count, inserted_text in rows:
+        deleted_count = int(deleted_count) if pd.notna(deleted_count) else 0
+        inserted_text = str(inserted_text) if pd.notna(inserted_text) else ""
+        if deleted_count > 0:
+            composite = (
+                composite[:-deleted_count]
+                if deleted_count <= len(composite)
+                else ""
+            )
+        composite += inserted_text
+    return composite
+
+
+def check_input_events(frames, target_run_id):
+    """대상 run_id의 input_events(2단계, tap_commit 이벤트) 정합성을 확인한다.
+
+    파일이 없거나 이 실행에서 키 입력이 없으면 실패가 아니라 스킵/미수행으로
+    처리한다(기존 패턴 유지) - 캘리만 하고 끝난 실행 등에서는 당연히 없다.
+    """
+    print("\n=== 6. input_events(2단계) 정합성 ===")
+
+    df = frames.get("input_events")
+
+    if df is None:
+        print("  [스킵] input_events 파일 없음 (2단계 미배선이거나 이 실행에서 키 입력 없음)")
+        return None
+
+    if target_run_id is None or "run_id" not in df.columns:
+        print("  [스킵] 대상 run_id를 판단할 수 없음")
+        return None
+
+    run_df = df[df["run_id"] == target_run_id]
+
+    if run_df.empty:
+        print("  [정보] 이 실행에서 input_events 없음 (미수행)")
+        return None
+
+    ok = True
+
+    # (ts_ms, event_seq) 정렬 유효성 - CSV 기록 순서(=실제 발생 순서) 기준으로
+    # ts_ms가 역행하지 않고 event_seq가 단조 증가하는지 확인한다.
+    if "ts_ms" in run_df.columns:
+        ts = run_df["ts_ms"].to_numpy()
+        ts_diffs = ts[1:] - ts[:-1]
+        if len(ts_diffs) > 0 and (ts_diffs < 0).any():
+            bad_at = int((ts_diffs < 0).argmax())
+            print(f"  [실패] ts_ms 역행 발견 ({bad_at}번째 행)")
+            ok = False
+        else:
+            print(f"  [통과] ts_ms 단조 비감소 ({len(run_df)}행)")
+    else:
+        print("  [실패] ts_ms 컬럼 없음")
+        ok = False
+
+    if "event_seq" in run_df.columns:
+        seq = run_df["event_seq"].to_numpy()
+        seq_diffs = seq[1:] - seq[:-1]
+        if len(seq_diffs) > 0 and (seq_diffs <= 0).any():
+            bad_at = int((seq_diffs <= 0).argmax())
+            print(f"  [실패] event_seq가 단조 증가하지 않음 ({bad_at}번째 행)")
+            ok = False
+        else:
+            print("  [통과] event_seq 단조 증가")
+    else:
+        print("  [실패] event_seq 컬럼 없음")
+        ok = False
+
+    # 동일 frame_id 중복 행 - Hook A/B 이중 발화 관측치. 실패 조건이 아니라
+    # 그냥 몇 건 있는지만 보고한다(막지 않기로 한 결정 - Phase A 조사 결과).
+    if "frame_id" in run_df.columns:
+        frame_counts = run_df["frame_id"].value_counts()
+        dup_frames = frame_counts[frame_counts > 1]
+        if len(dup_frames) > 0:
+            print(f"  [관측] 동일 frame_id 중복 행 {len(dup_frames)}개 프레임 "
+                  "(Hook A/B 이중 발화 가능성 - 실패 아님)")
+        else:
+            print("  [관측] 동일 frame_id 중복 행 없음")
+
+    # 천지인 tap 수 >= 최종 문자 수 (delta replay 기반)
+    if "keyboard_layout" in run_df.columns:
+        cheonjiin_df = run_df[run_df["keyboard_layout"] == "cheonjiin"]
+
+        if cheonjiin_df.empty:
+            print("  [정보] 이 실행에 천지인 입력 없음")
+        else:
+            tap_count = len(cheonjiin_df)
+            final_text = _replay_tail_diffs(
+                zip(cheonjiin_df["deleted_count"], cheonjiin_df["inserted_text"])
+            )
+            char_count = len(final_text)
+
+            if tap_count >= char_count:
+                print(f"  [통과] 천지인 tap 수({tap_count}) >= 최종 문자 수({char_count})")
+            else:
+                print(f"  [실패] 천지인 tap 수({tap_count}) < 최종 문자 수({char_count}) "
+                      "- delta 기록 이상 의심")
+                ok = False
+
+    return ok
 
 
 def summarize_all_runs(frames):
@@ -355,6 +478,9 @@ def main():
     )
     targeting_path = os.path.join(args.results_dir, "targeting_results_v1.0.csv")
     mouth_history_path = os.path.join(args.calib_dir, "mouth_baseline_history_v1.0.csv")
+    input_events_path = os.path.join(
+        args.results_dir, f"input_events_v{InputEventLogger.SCHEMA_VERSION}.csv"
+    )
 
     print("=" * 60)
     print("1단계 검증: 생성된 CSV 로딩")
@@ -369,13 +495,16 @@ def main():
         "mapper_session_log": _load_csv(session_log_path, "mapper_session_log"),
         "targeting_results": _load_csv(targeting_path, "targeting_results"),
         "mouth_baseline_history": _load_csv(mouth_history_path, "mouth_baseline_history"),
+        "input_events": _load_csv(input_events_path, "input_events"),
     }
 
     if args.all:
         summarize_all_runs(frames)
         return
 
-    target_run_id, selection_note = select_target_run_id(frames["sessions"], args.run_id)
+    target_run_id, selection_note = select_target_run_id(
+        frames["mapper_session_log"], args.run_id
+    )
 
     results = {
         "required_files_present": check_required_files(frames, REQUIRED_FILES),
@@ -383,7 +512,8 @@ def main():
         "calib_join": check_calib_join(frames["sessions"], frames["calibration_quality"]),
         "config_hash_format": check_config_hash(frames["sessions"]),
         "ts_ms_monotonic": check_ts_ms_monotonic(frames["mapper_session_log"]),
-        "no_orphan_run_ids": check_orphan_run_ids(frames),
+        "no_unlinked_run_ids": check_unlinked_run_ids(frames),
+        "input_events": check_input_events(frames, target_run_id),
     }
 
     print("\n" + "=" * 60)

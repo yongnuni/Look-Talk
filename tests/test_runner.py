@@ -101,6 +101,29 @@ class TestRunner:
         self.active = False
 
         return True
+
+    def get_target_char(self, committed_length):
+        """목표 문장에서 committed_length 다음에 와야 할 글자를 반환한다.
+
+        committed_length는 호출자가 넘기는 "지금까지 확정된 글자 수"
+        (main.py에서는 hangul.finalText 길이를 넘긴다). 조합 중인 자모
+        버퍼/천지인 pending preview는 세지 않는다 - 화면에 보이는 조합 중
+        음절까지 포함하면 위치가 어긋날 수 있다(음절 확정이 소급적으로
+        재해석되는 경로가 있음). 그래서 이 값은 근사치이며, finalText가
+        나중에 소급 변경되는 경우(천지인 모음 치환 등) 부정확할 수 있다.
+        비활성 상태이거나 범위를 벗어나면(문장 완료, 오타로 목표보다
+        길어짐 등) 빈 문자열을 반환한다.
+        """
+
+        if (
+            not self.active
+            or committed_length < 0
+            or committed_length >= len(self.target_text)
+        ):
+            return ""
+
+        return self.target_text[committed_length]
+
     def get_input_metrics(self):
 
         if (
