@@ -6,7 +6,13 @@ from tests.test_sentences import TEST_SENTENCES
 
 class TestRunner:
 
-    def __init__(self):
+    def __init__(self, run_id=None):
+
+        # run_id: 앱 실행 1회 식별자(main.py 주입). 이 클래스는 자체 CSV
+        # 출력이 없어(지표는 MetricsCollector.set_input_metrics()로 전달됨)
+        # 지금 당장은 저장에 쓰이지 않지만, 다섯 클래스에 동일하게 주입한다는
+        # 1단계 방침에 맞춰 받아만 둔다.
+        self.run_id = run_id
 
         self.target_text = random.choice(
             TEST_SENTENCES

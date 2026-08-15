@@ -7,20 +7,21 @@
 수집 단위
 - 세션 1개  -> sessions.csv 한 행 (메타데이터)
 - 타깃 N개  -> gaze_accuracy.csv N행 (지표 본체)
-두 파일은 session_id로 연결된다.
+두 파일은 test_id로 연결된다. run_id는 앱 실행 1회를 가리키는 별도 상위 식별자로,
+같은 실행에서 나온 여러 test_id/calib_id를 묶어 조인할 때 쓴다.
 """
 
 import math
-import uuid
 import statistics
 from datetime import datetime, timezone
 
 from src.metrics.csv_export import append_rows
+from src.common import ids
 
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.5"
+    SCHEMA_VERSION = "1.6"
 
     def __init__(
             self,
@@ -38,9 +39,24 @@ class MetricsCollector:
             calibration_fallback_used=False,
             rejected_calib_rmse_px=None,
             applied_calib_rmse_px=None,
+            run_id=None,
+            keyboard_layout=None,
+            config_hash=None,
+            config_json=None,
+            t0_utc=None,
+            screen_w=None,
+            screen_h=None,
+            monitor_diagonal_inch=None,
+            ridge_enabled=None,
+            backbone_enabled=None,
     ):
     # 세션 단위 메타데이터 (sessions.csv 한 행)
-        self.session_id = str(uuid.uuid4())
+        # test_id: "9점 테스트 1회" 식별자. 기존 이름은 session_id였다
+        # (docs/current_state_report.md 2-4절 — 앱 실행 전체를 가리키는 run_id와
+        # 혼동을 피하려고 개명했다). 발급 자체는 uuid4 그대로, 출처만
+        # src.common.ids로 통일했다.
+        self.test_id = ids.new_test_id()
+        self.run_id = run_id
         self.user_id = user_id
         self.dev_version = dev_version
         self.px_per_cm = px_per_cm
@@ -54,6 +70,20 @@ class MetricsCollector:
         self.calibration_fallback_used = calibration_fallback_used
         self.rejected_calib_rmse_px = rejected_calib_rmse_px
         self.applied_calib_rmse_px = applied_calib_rmse_px
+
+        # ── 실험 조건 스냅샷 / 시계 앵커 / 선택 기능 활성 상태 ──
+        # 값 자체는 main.py가 계산해서 넘겨준다(이 클래스는 기존과 같이
+        # "받은 값을 저장·출력"만 하고, config_snapshot/clock을 직접 참조하지
+        # 않는다 — px_per_cm 등 기존 필드와 동일한 패턴 유지).
+        self.keyboard_layout = keyboard_layout
+        self.config_hash = config_hash
+        self.config_json = config_json
+        self.t0_utc = t0_utc
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self.monitor_diagonal_inch = monitor_diagonal_inch
+        self.ridge_enabled = ridge_enabled
+        self.backbone_enabled = backbone_enabled
 
         self.input_duration_sec = None
         self.cursor_travel_distance_px = None
@@ -157,7 +187,8 @@ class MetricsCollector:
         # 유효 프레임이 하나도 없으면 오차 계산 불가 → 실패 행으로 기록
         if valid == 0:
             self.target_rows.append({
-                "session_id": self.session_id,
+                "run_id": self.run_id,
+                "test_id": self.test_id,
                 "target_index": c["target_index"],
                 "target_x_px": c["target_x_px"],
                 "target_y_px": c["target_y_px"],
@@ -194,7 +225,8 @@ class MetricsCollector:
         iris_std_y = statistics.stdev(c["iris_ys"]) if valid > 1 else 0.0
 
         self.target_rows.append({
-            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "test_id": self.test_id,
             "target_index": c["target_index"],
             "target_x_px": c["target_x_px"],
             "target_y_px": c["target_y_px"],
@@ -230,12 +262,24 @@ class MetricsCollector:
     def end_session(self):
         self.end_timestamp = datetime.now(timezone.utc).isoformat()
 
+    # sessions 행은 두 경로에서 온다 — 문장 입력 테스트를 끝까지 완료했을 때
+    # (main.py의 tester.check_complete 분기)와, 완료 없이 프로그램이 종료돼
+    # 안전망이 대신 저장했을 때(app_exit). 이 둘을 구분하지 않으면 후자의
+    # input_duration_sec 등 결측 행이 완주 행과 섞여 입력 지표 집계를 왜곡한다.
+    EXPORT_REASON_SENTENCE_COMPLETED = "sentence_completed"
+    EXPORT_REASON_APP_EXIT = "app_exit"
+    _VALID_EXPORT_REASONS = (
+        EXPORT_REASON_SENTENCE_COMPLETED,
+        EXPORT_REASON_APP_EXIT,
+    )
+
     def export_csv(
         self,
         sessions_path=None,
         accuracy_path=None,
         export_session=True,
-        export_accuracy=True
+        export_accuracy=True,
+        export_reason=None,
     ):
         if sessions_path is None:
             sessions_path = f"sessions_v{self.SCHEMA_VERSION}.csv"
@@ -245,11 +289,19 @@ class MetricsCollector:
 
         if export_session:
 
+            if export_reason not in self._VALID_EXPORT_REASONS:
+                raise ValueError(
+                    "export_session=True면 export_reason은 "
+                    f"{self._VALID_EXPORT_REASONS} 중 하나여야 합니다: "
+                    f"{export_reason!r}"
+                )
+
             if self.end_timestamp is None:
                 self.end_session()
 
             session_fields = [
-                "session_id",
+                "run_id",
+                "test_id",
                 "user_id",
                 "dev_version",
                 "start_timestamp",
@@ -269,11 +321,22 @@ class MetricsCollector:
                 "calibration_fallback_used",
                 "rejected_calib_rmse_px",
                 "applied_calib_rmse_px",
+                "keyboard_layout",
+                "config_hash",
+                "config_json",
+                "t0_utc",
+                "screen_w",
+                "screen_h",
+                "monitor_diagonal_inch",
+                "ridge_enabled",
+                "backbone_enabled",
+                "export_reason",
                 "schema_version",
             ]
 
             session_row = {
-                "session_id": self.session_id,
+                "run_id": self.run_id,
+                "test_id": self.test_id,
                 "user_id": self.user_id,
                 "dev_version": self.dev_version,
                 "start_timestamp": self.start_timestamp,
@@ -331,6 +394,16 @@ class MetricsCollector:
                     if self.applied_calib_rmse_px is not None
                     else None
                 ),
+                "keyboard_layout": self.keyboard_layout,
+                "config_hash": self.config_hash,
+                "config_json": self.config_json,
+                "t0_utc": self.t0_utc,
+                "screen_w": self.screen_w,
+                "screen_h": self.screen_h,
+                "monitor_diagonal_inch": self.monitor_diagonal_inch,
+                "ridge_enabled": self.ridge_enabled,
+                "backbone_enabled": self.backbone_enabled,
+                "export_reason": export_reason,
                 "schema_version": self.SCHEMA_VERSION,
             }
 
@@ -343,7 +416,8 @@ class MetricsCollector:
         if export_accuracy:
 
             accuracy_fields = [
-                "session_id",
+                "run_id",
+                "test_id",
                 "target_index",
                 "target_x_px",
                 "target_y_px",

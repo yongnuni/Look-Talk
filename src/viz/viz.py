@@ -68,7 +68,7 @@ def sessions_filename():
 def load_data(results_dir):
     """gaze_accuracy_vN.N.csv + sessions_vN.N.csv를 읽어 병합한 DataFrame을 반환.
 
-    타깃 단위 지표(gaze_accuracy)에 세션 메타(sessions)를 session_id로 붙인다.
+    타깃 단위 지표(gaze_accuracy)에 세션 메타(sessions)를 test_id로 붙인다.
     start_timestamp 기준으로 정렬해 항상 측정 시간순을 보장한다.
     """
     acc_path = os.path.join(results_dir, accuracy_filename())
@@ -79,9 +79,9 @@ def load_data(results_dir):
     # sessions 파일이 있으면 메타(버전·시각)를 붙인다. 없어도 동작.
     if os.path.isfile(sess_path):
         sess = pd.read_csv(sess_path, encoding="utf-8-sig")
-        keep = [c for c in ["session_id", "dev_version", "start_timestamp",
+        keep = [c for c in ["test_id", "dev_version", "start_timestamp",
                             "px_per_cm"] if c in sess.columns]
-        acc = acc.merge(sess[keep], on="session_id", how="left")
+        acc = acc.merge(sess[keep], on="test_id", how="left")
 
     # 시간순 정렬 (start_timestamp 없으면 원래 순서 유지)
     if "start_timestamp" in acc.columns:
@@ -93,17 +93,17 @@ def load_data(results_dir):
 def filter_sessions(df, exclude_ids=None):
     """분석에서 제외할 세션(불량 데이터)을 걸러낸다. 원본은 보존.
 
-    exclude_ids: 영구 제외할 session_id 리스트. 기본은 아무것도 제외 안 함.
+    exclude_ids: 영구 제외할 test_id 리스트. 기본은 아무것도 제외 안 함.
     """
     if not exclude_ids:
         return df
-    return df[~df["session_id"].isin(exclude_ids)].copy()
+    return df[~df["test_id"].isin(exclude_ids)].copy()
 
 
 def latest_sessions(df, n=1):
     """측정 시간순으로 가장 최근 n개 세션만 반환.
 
-    session_id를 직접 지정하지 않고 "최근 N개"로 자동 선택한다.
+    test_id를 직접 지정하지 않고 "최근 N개"로 자동 선택한다.
     start_timestamp가 없으면 등장 순서 기준.
     """
     if "start_timestamp" in df.columns:
@@ -112,14 +112,14 @@ def latest_sessions(df, n=1):
         order = df
 
     # 세션의 등장(정렬) 순서를 보존하며 고유 id 추출 → 뒤에서 n개
-    seen = list(dict.fromkeys(order["session_id"].tolist()))
+    seen = list(dict.fromkeys(order["test_id"].tolist()))
     recent_ids = seen[-n:]
-    return df[df["session_id"].isin(recent_ids)].copy()
+    return df[df["test_id"].isin(recent_ids)].copy()
 
 
 def get_session(df, session_id):
     """단일 세션을 target_index 순으로 정렬해 반환."""
-    s = df[df["session_id"] == session_id].sort_values("target_index")
+    s = df[df["test_id"] == session_id].sort_values("target_index")
     return s
 
 
@@ -129,7 +129,7 @@ def list_session_ids(df):
         order = df.sort_values("start_timestamp")
     else:
         order = df
-    return list(dict.fromkeys(order["session_id"].tolist()))
+    return list(dict.fromkeys(order["test_id"].tolist()))
 
 
 # ── 텍스트 요약 (새 지표 cm·STB-01~04 포함) ────────────────
@@ -141,13 +141,13 @@ def summarize_session(session_df):
     유효 예측이 없는(전실패) 타깃은 평균에서 자동 제외(NaN 무시).
     """
     s = session_df
-    sid = s["session_id"].iloc[0] if len(s) else "?"
+    sid = s["test_id"].iloc[0] if len(s) else "?"
 
     def _mean(col):
         return float(s[col].mean()) if col in s.columns else float("nan")
 
     summary = {
-        "session_id": sid,
+        "test_id": sid,
         "short_id": str(sid)[:8],
         "n_targets": int(len(s)),
         "mean_error_px": _mean("euclidean_error_px"),
@@ -186,7 +186,7 @@ def format_summary_line(summary):
 def _draw_error_map(ax, session_df, screen_w, screen_h):
     """오차 지도를 주어진 ax에 그린다. (화면 좌표: 위가 0 → y축 뒤집기)"""
     s = session_df
-    sid = s["session_id"].iloc[0] if len(s) else "?"
+    sid = s["test_id"].iloc[0] if len(s) else "?"
     valid = s.dropna(subset=["pred_x_px", "pred_y_px"])
 
     ax.scatter(valid["target_x_px"], valid["target_y_px"],
@@ -250,7 +250,7 @@ def plot_session_overview(session_df, screen_w, screen_h):
     fig 한 개만 반환하므로 파일도 한 장, 팝업 창도 한 개.
     """
     s = session_df
-    sid = s["session_id"].iloc[0] if len(s) else "?"
+    sid = s["test_id"].iloc[0] if len(s) else "?"
 
     fig, (ax_top, ax_bot) = plt.subplots(
         2, 1, figsize=(10, 10),
@@ -295,13 +295,13 @@ def plot_session_trend(df):
         "mean_error": ("euclidean_error_px", "mean"),
         "std_error": ("euclidean_error_px", "std"),
     }
-    summary = df.groupby("session_id").agg(**agg).reset_index()
+    summary = df.groupby("test_id").agg(**agg).reset_index()
 
     # 메타(시각·버전)를 붙여 시간순 정렬 — groupby의 알파벳순 정렬 교정
-    meta_cols = [c for c in ["session_id", "dev_version", "start_timestamp"]
+    meta_cols = [c for c in ["test_id", "dev_version", "start_timestamp"]
                  if c in df.columns]
-    meta = df[meta_cols].drop_duplicates("session_id")
-    summary = summary.merge(meta, on="session_id", how="left")
+    meta = df[meta_cols].drop_duplicates("test_id")
+    summary = summary.merge(meta, on="test_id", how="left")
 
     if "start_timestamp" in summary.columns:
         summary = summary.sort_values("start_timestamp").reset_index(drop=True)
@@ -331,7 +331,7 @@ def plot_session_trend(df):
     ax.set_xlabel("session (chronological)")
     ax.set_ylabel("mean error (px)")
     ax.set_xticks(list(x))
-    ax.set_xticklabels([str(s)[:6] for s in summary["session_id"]],
+    ax.set_xticklabels([str(s)[:6] for s in summary["test_id"]],
                        rotation=45, fontsize=8)
 
     # 범례: 버전별 색 + 평균선

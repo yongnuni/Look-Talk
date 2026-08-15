@@ -104,7 +104,7 @@ def main():
                 print("사용 가능한 세션:", [str(s)[:8] for s in all_ids])
                 return
             target_ids = matched
-            scope_df = df[df["session_id"].isin(target_ids)].copy()
+            scope_df = df[df["test_id"].isin(target_ids)].copy()
         else:
             n = args.num if args.num is not None else 1
             scope_df = viz.latest_sessions(df, n)

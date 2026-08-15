@@ -19,15 +19,17 @@ SessionLogger: calibrated/no_calibration 두 모드가 공통으로 쓰는 프�
 """
 
 import os
-import time
-import uuid
+
+from src.common import clock
 
 
 class SessionLogger:
 
+    SCHEMA_VERSION = "1.1"
+
     FIELDNAMES = [
-        "session_id",
-        "timestamp",
+        "run_id",
+        "ts_ms",
         "mode",
         "active_method",
         "screen_w",
@@ -52,16 +54,23 @@ class SessionLogger:
         mapper_metadata=None,
         screen_w=None,
         screen_h=None,
-        path=os.path.join("gaze_accuracy_results", "mapper_session_log_v1.0.csv"),
+        path=None,
         flush_every=60,
         enabled=True,
+        run_id=None,
     ):
-        self.session_id = str(uuid.uuid4())
+        # run_id: 앱 실행 1회 식별자(main.py 주입, src/common/ids 경유 발급).
+        # 이 클래스가 자체 발급하던 session_id는 run_id와 수명이 완전히
+        # 같아(둘 다 main() 1회 실행 동안 고정) 중복이었으므로 제거했다.
+        self.run_id = run_id
         self.mode = mode
         self.mapper_metadata = mapper_metadata or {}
         self.screen_w = screen_w
         self.screen_h = screen_h
-        self.path = path
+        self.path = path or os.path.join(
+            "gaze_accuracy_results",
+            f"mapper_session_log_v{self.SCHEMA_VERSION}.csv",
+        )
         self.flush_every = max(1, flush_every)
         self.enabled = enabled
 
@@ -88,8 +97,8 @@ class SessionLogger:
 
         try:
             self._buffer.append({
-                "session_id": self.session_id,
-                "timestamp": time.time(),
+                "run_id": self.run_id,
+                "ts_ms": clock.now_ms(),
                 "mode": self.mode,
                 "active_method": active_method,
                 "screen_w": self.screen_w,
