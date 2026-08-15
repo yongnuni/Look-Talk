@@ -1247,13 +1247,13 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
             # ── 드웰 클릭 ─────────────────────────────────────
 
-                # ── 고정 감지 + 키 확대 (독립 모듈, 좌표는 건드리지 않음) ──
-                fixation_state = fixation.update(
-                    gaze_x if tracking_valid else -1,
-                    gaze_y if tracking_valid else -1
-                )
+            # ── 고정 감지 + 키 확대 (독립 모듈, 좌표는 건드리지 않음) ──
+            fixation_state = fixation.update(
+                gaze_x if tracking_valid else -1,
+                gaze_y if tracking_valid else -1
+            )
 
-                key_zoom.update(fixation_state, buttonList)
+            key_zoom.update(fixation_state, buttonList)
 
             if tracking_valid:
                 hovered_key, dwell_ratio, clicked_key = dwell.update(
