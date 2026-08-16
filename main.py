@@ -561,18 +561,30 @@ def export_targeting_results(run_id, keyboard_layout, targeting_runner, aborted)
 
     fieldnames = [
         "run_id",
-        "keyboard_layout",
         "ts_ms",
-        "target_index",
-        "success",
-        "reaction_time_sec",
-        "input_mode",
-        "timeout",
-        "target_x",
-        "target_y",
-        "cursor_x",
-        "cursor_y",
-        "aborted",
+        "saved_at",
+
+        "mar_baseline",
+        "open_mar",
+        "open_threshold",
+        "close_threshold",
+
+        "mouth_success_rate",
+        "activation_amplitude_mean",
+        "activation_duration_mean",
+        "open_close_speed_mean",
+
+        "mouth_consistency",
+        "mouth_contrast_ratio",
+        "mouth_false_trigger_rate",
+        "amplitude_decay",
+
+        "mouth_min_hold_duration",
+        "mouth_init_score",
+
+        "total_trials",
+        "success_count",
+        "false_trigger_count",
     ]
 
     ts_ms = clock.now_ms()
@@ -639,7 +651,10 @@ def append_mouth_baseline_history(run_id, saved_path):
     fieldnames = ["run_id", "ts_ms", "saved_at"] + list(mouth_result.keys())
 
     append_rows(
-        os.path.join("calibration_results", "mouth_baseline_history_v1.0.csv"),
+        os.path.join(
+            "calibration_results",
+            "mouth_baseline_history_v2.0.csv"
+        ),
         fieldnames,
         [row],
     )
@@ -994,6 +1009,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 if mouth_mode and not mouth_calibrator.done:
                     mar = mouth_aspect_ratio(lms)
                     mouth_progress = mouth_calibrator.update(mar)
+
                     if mouth_calibrator.done:
                         mouth_result = mouth_calibrator.get_result_dict()
 
@@ -1003,12 +1019,34 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
                         saved_path = save_baseline(
                             mouth_result=mouth_result
-                    )
+                        )
 
                         print(f"[baseline] 저장 완료: {saved_path}")
-                        append_mouth_baseline_history(run_id, saved_path)
-                        mouth = MouthClickDetector()
+
+                        append_mouth_baseline_history(
+                            run_id,
+                            saved_path
+                        )
+
+                        # -----------------------------------------
+                        # 개인별 MAR Threshold 실제 적용
+                        # -----------------------------------------
+
+                        mouth.set_thresholds(
+                            mouth_result["open_threshold"],
+                            mouth_result["close_threshold"]
+                        )
+
+                        print(
+                            "[mouth] 개인별 Threshold 적용 완료 | "
+                            f"open={mouth_result['open_threshold']:.3f}, "
+                            f"close={mouth_result['close_threshold']:.3f}"
+                        )
+
+                        # 이전 입력 상태 초기화
                         dwell.reset()
+                        mouth.reset()
+
                         hover_start_ts_ms = None
                         hover_start_key = None
 
@@ -1022,7 +1060,10 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         remaining
                     )
 
-                    cv2.imshow("Eye Keyboard", mouth_canvas)
+                    cv2.imshow(
+                        "Eye Keyboard",
+                        mouth_canvas
+                    )
 
                     key = cv2.waitKey(1) & 0xFF
 
@@ -1031,6 +1072,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
                     elif key == ord('r'):
                         mouth_calibrator.reset()
+                        mouth.reset()
 
                     continue
 
@@ -1240,23 +1282,59 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 # 일반 키보드 입력·렌더링을 실행하지 않는다.
                 continue
 
-            # ── 드웰 클릭 ─────────────────────────────────────
+            # ── 입력 방식 처리 ─────────────────────────────────
 
             if tracking_valid:
-                hovered_key, dwell_ratio, clicked_key = dwell.update(
-                    gaze_x,
-                    gaze_y,
-                    buttonList
-                )
 
-                mouth_click, mar = mouth.update(
-                    lms,
-                    hovered_key
-                )
+                # =================================================
+                # 입벌림 입력 모드
+                # =================================================
+                if mouth_mode:
+
+                    # 시선은 어떤 키를 바라보고 있는지 찾는 용도로만 사용
+                    hovered_key, _, _ = dwell.update(
+                        gaze_x,
+                        gaze_y,
+                        buttonList
+                    )
+
+                    # 드웰 입력은 사용하지 않음
+                    dwell.reset()
+
+                    dwell_ratio = 0.0
+                    clicked_key = None
+
+                    # 실제 클릭은 입벌림으로만 수행
+                    mouth_click, mar = mouth.update(
+                        lms,
+                        hovered_key
+                    )
+
+                # =================================================
+                # 시선 Dwell 입력 모드
+                # =================================================
+                else:
+
+                    hovered_key, dwell_ratio, clicked_key = dwell.update(
+                        gaze_x,
+                        gaze_y,
+                        buttonList
+                    )
+
+                    # 시선 입력 모드에서는 입벌림 선택 비활성화
+                    mouth.reset()
+
+                    mouth_click = False
+                    mar = mouth_aspect_ratio(lms)
+
             else:
+
                 dwell.reset()
+                mouth.reset()
+
                 hovered_key = None
                 clicked_key = None
+
                 dwell_ratio = 0.0
                 mouth_click = False
                 mar = 0.0
@@ -1271,7 +1349,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 )
 
             # 기존 드웰 클릭
-            if clicked_key:
+            if clicked_key and not mouth_mode:
                 tester.on_key_press()
 
                 pre_tap_button_list = buttonList
@@ -1314,13 +1392,23 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 hover_start_key = None
 
             # 입벌림 클릭
-            if mouth_click and hovered_key:
+            if (
+                mouth_mode
+                and mouth_click
+                and mouth.selected_key is not None
+            ):
+
+                # 입벌림 전에 미리 잠가둔 키 사용
+                selected_key = mouth.selected_key
 
                 tester.on_key_press()
 
                 pre_tap_button_list = buttonList
+
                 pre_tap_target_char = (
-                    tester.get_target_char(len(hangul.finalText))
+                    tester.get_target_char(
+                        len(hangul.finalText)
+                    )
                     if tester.active
                     else ""
                 )
@@ -1332,7 +1420,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                     deleted_count,
                     inserted_text,
                 ) = process_key(
-                    hovered_key,
+                    selected_key,
                     is_korean,
                     is_shift,
                     buttonList,
@@ -1344,20 +1432,30 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                     frame_id=frame_id,
                     input_mode="mouth",
                     keyboard_layout=keyboard_layout,
-                    key_id=hovered_key,
+
+                    # 현재 hovered_key가 아니라
+                    # 입벌림 전에 잠가둔 키 기록
+                    key_id=selected_key,
+
                     button_list=pre_tap_button_list,
                     target_char=pre_tap_target_char,
                     hover_start_ts_ms=hover_start_ts_ms,
+
                     cursor_x=gaze_x,
                     cursor_y=gaze_y,
+
                     deleted_count=deleted_count,
                     inserted_text=inserted_text,
                     trigger_signal=mar,
                 )
+
                 hover_start_ts_ms = None
                 hover_start_key = None
 
-                print("MOUTH INPUT:", hovered_key)
+                print(
+                    "MOUTH INPUT:",
+                    selected_key
+                )
 
 
             # ── 렌더링 ────────────────────────────────────────
@@ -1453,9 +1551,14 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 buttonList,
                 gaze_x,
                 gaze_y,
-                dwell.dwell_key,
+                hovered_key,
                 dwell_ratio,
-                show_cursor
+                show_cursor,
+                locked_key=(
+                    mouth.locked_key
+                    if mouth_mode
+                    else None
+                )
             )
 
             if tester.is_showing_complete():
@@ -1796,10 +1899,27 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 print("show_cursor:", show_cursor)
 
             elif key == ord('m'):
+
+                # 입벌림 입력 모드 활성화
                 mouth_mode = True
+
+                # 개인별 MAR 캘리브레이션 초기화
+                # reset() 시 입 닫힘 측정 단계부터 다시 시작
                 mouth_calibrator.reset()
 
-                print("입벌림 캘리브레이션 시작")
+                # 이전 입벌림 판정 상태 초기화
+                mouth.reset()
+
+                # 기존 dwell 진행 상태 초기화
+                dwell.reset()
+
+                # 이전 hover 정보 초기화
+                hover_start_ts_ms = None
+                hover_start_key = None
+
+                print()
+                print("===== 입벌림 캘리브레이션 시작 =====")
+                print()
 
             elif key == ord('y'):
                 targeting_runner.start()

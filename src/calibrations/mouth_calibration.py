@@ -22,9 +22,15 @@ class MouthCalibrationResult:
     입벌림 캘리브레이션 최종 결과
     """
 
+    # 개인별 MAR 기준값
     mar_baseline: float
-    activation_threshold: float
+    open_mar: float
 
+    # 개인별 입 열림 / 닫힘 Threshold
+    open_threshold: float
+    close_threshold: float
+
+    # 기존 평가 지표
     mouth_success_rate: float
     activation_amplitude_mean: float
     activation_duration_mean: float
@@ -44,7 +50,7 @@ class MouthCalibrationResult:
 
     def to_dict(self):
         return asdict(self)
-
+    
 
 class MouthCalibration:
     """
@@ -66,6 +72,8 @@ class MouthCalibration:
         response_timeout_sec=5.0,
         min_open_hold_sec=1.2,
         close_confirm_sec=1.0,
+        open_ratio=0.55,
+        close_ratio=0.30,
     ):
         self.min_open_hold_sec = min_open_hold_sec
         self.total_trials = total_trials
@@ -73,6 +81,11 @@ class MouthCalibration:
         self.ready_sec = ready_sec
         self.response_timeout_sec = response_timeout_sec
         self.close_confirm_sec = close_confirm_sec
+
+        # Closed MAR ~ Open MAR 사이에서
+        # 개인별 Threshold를 계산하기 위한 비율
+        self.open_ratio = open_ratio
+        self.close_ratio = close_ratio
 
         self.reset()
 
@@ -85,6 +98,16 @@ class MouthCalibration:
         self.rest_mar_samples = []
 
         self.mar_baseline = None
+
+        # 입벌림 시행을 통해 계산
+        self.open_mar = None
+
+        # 실제 MouthClickDetector에 적용할 개인별 Threshold
+        self.open_threshold = None
+        self.close_threshold = None
+
+        # 캘리브레이션 중 5회 테스트를 시작하기 위한
+        # 임시 입벌림 감지 기준
         self.activation_threshold = None
 
         self.current_trial_index = 0
@@ -317,6 +340,40 @@ class MouthCalibration:
         success_count = len(success_trials)
         mouth_success_rate = success_count / self.total_trials
 
+        peak_mars = [
+            trial.peak_mar
+            for trial in success_trials
+        ]
+
+        if peak_mars:
+            self.open_mar = statistics.mean(
+                peak_mars
+            )
+        else:
+            self.open_mar = self.mar_baseline
+
+        # 개인별 Open / Close Threshold 계산
+        mar_gap = (
+            self.open_mar
+            - self.mar_baseline
+        )
+
+        if mar_gap > 0.03:
+            self.open_threshold = (
+                self.mar_baseline
+                + mar_gap * self.open_ratio
+            )
+
+            self.close_threshold = (
+                self.mar_baseline
+                + mar_gap * self.close_ratio
+            )
+        else:
+            # 입 닫힘과 입 벌림의 차이가 너무 작으면
+            # 잘못된 캘리브레이션으로 판단하고 기본값 사용
+            self.open_threshold = 0.30
+            self.close_threshold = 0.23
+
         amplitudes = [
             trial.activation_amplitude
             for trial in success_trials
@@ -387,9 +444,15 @@ class MouthCalibration:
         )
 
         return MouthCalibrationResult(
+            # 개인별 MAR 기준값
             mar_baseline=self.mar_baseline,
-            activation_threshold=self.activation_threshold,
+            open_mar=self.open_mar,
 
+            # 개인별 입 열림 / 닫힘 Threshold
+            open_threshold=self.open_threshold,
+            close_threshold=self.close_threshold,
+
+            # 기존 평가 지표
             mouth_success_rate=mouth_success_rate,
             activation_amplitude_mean=activation_amplitude_mean,
             activation_duration_mean=activation_duration_mean,

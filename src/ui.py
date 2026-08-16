@@ -400,7 +400,8 @@ def drawAll(
     gaze_y,
     dwell_key,
     dwell_ratio,
-    show_cursor
+    show_cursor,
+    locked_key=None
 ):
 
     img_pil = Image.fromarray(img)
@@ -438,23 +439,53 @@ def drawAll(
 
         text_color = KEY_TEXT_COLOR
 
-        if on_key and dwell_key == key and show_cursor:
+        # =================================================
+        # 입벌림 모드에서 잠긴 키
+        # =================================================
+        if locked_key is not None and key == locked_key:
+
+            # 잠금된 키는 진한 파란색으로 표시
+            bg_color = DWELL_BG_END
+            border_color = DWELL_BORDER_END
+            text_color = KEY_TEXT_COLOR_DWELL
+
+        # =================================================
+        # 시선 Dwell 진행 중인 키
+        # =================================================
+        elif on_key and dwell_key == key and show_cursor:
 
             t = dwell_ratio
 
             bg_color = tuple(
-                int(HOVER_BG[i] + (DWELL_BG_END[i] - HOVER_BG[i]) * t)
+                int(
+                    HOVER_BG[i]
+                    + (DWELL_BG_END[i] - HOVER_BG[i]) * t
+                )
                 for i in range(3)
             )
 
             border_color = tuple(
-                int(HOVER_BORDER[i] + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * t)
+                int(
+                    HOVER_BORDER[i]
+                    + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * t
+                )
                 for i in range(3)
             )
 
             if t > 0.5:
                 text_color = KEY_TEXT_COLOR_DWELL
 
+        # =================================================
+        # 현재 바라보고 있는 키
+        # =================================================
+        elif on_key and show_cursor:
+
+            bg_color = HOVER_BG
+            border_color = HOVER_BORDER
+
+        # =================================================
+        # 커서 숨김 모드
+        # =================================================
         elif on_key and not show_cursor:
 
             bg_color = (255, 235, 0)
