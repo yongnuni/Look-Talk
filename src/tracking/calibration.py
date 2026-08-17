@@ -12,24 +12,16 @@ from src.config import (
     CALIB_STABILIZE_SEC,
     CALIB_COLLECT_SEC,
     CALIB_STD_X,
-    CALIB_STD_Y
+    CALIB_STD_Y,
+    RIDGE_ALPHA,
+    RIDGE_DEGREE,
 )
 
 from src.tracking.feature_builder import FEATURE_DIM
 
 # ── 릿지 회귀 설정 ────────────────────────────────────────────
-# config.py에 없어도 동작하도록 기본값을 둡니다.
 # RIDGE_ALPHA: L2 정규화 강도. 캘리브레이션 점이 적을수록 키우세요 (0.5~10 권장 범위).
 # RIDGE_DEGREE: 다항 차수. 2 고정 권장. 3 이상은 16점 캘리브레이션에서 가장자리 발산 위험.
-try:
-    from src.config import RIDGE_ALPHA
-except ImportError:
-    RIDGE_ALPHA = 1.0
-
-try:
-    from src.config import RIDGE_DEGREE
-except ImportError:
-    RIDGE_DEGREE = 2
 
 
 class PolyRidgeMapper:
@@ -42,7 +34,7 @@ class PolyRidgeMapper:
     두 경로의 수학은 동일합니다: (X'X + αI)^-1 X'y
 
     홈그래피와 달리:
-        - 입력이 2차원(홍채)이 아니라 FEATURE_DIM차원(홍채+시선벡터+머리자세)
+        - 입력이 2차원(홍채)이 아니라 FEATURE_DIM차원(홍채+머리자세+눈위치 계열)
         - 머리 자세 변화가 특징에 포함되어 있어 매핑 자체가 자세를 흡수
     """
 
@@ -783,7 +775,7 @@ class Calibrator:
     def _fit_ridge(self):
         """
         캘리브레이션 완료 시점에 홈그래피와 병렬로 릿지 매퍼를 학습합니다.
-        특징 샘플이 부족하면(백본/머리자세 invalid로 features가 안 쌓인 경우)
+        특징 샘플이 부족하면(머리자세 invalid로 features가 안 쌓인 경우)
         조용히 건너뛰고, 릿지 모드에서 홈그래피 좌표로 폴백됩니다.
         """
 

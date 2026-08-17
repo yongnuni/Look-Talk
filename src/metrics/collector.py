@@ -12,6 +12,7 @@
 """
 
 import math
+import os
 import statistics
 from datetime import datetime, timezone
 
@@ -48,6 +49,8 @@ class MetricsCollector:
             screen_h=None,
             monitor_diagonal_inch=None,
             ridge_enabled=None,
+            # backbone_enabled: 백본 제거됨(2026-08). 호출부(main.py)가 항상 False를
+            # 넘긴다 — 기존 sessions CSV와의 스키마 호환을 위해 컬럼만 유지한다.
             backbone_enabled=None,
     ):
     # 세션 단위 메타데이터 (sessions.csv 한 행)
@@ -411,6 +414,10 @@ class MetricsCollector:
                 "schema_version": self.SCHEMA_VERSION,
             }
 
+            sessions_dir = os.path.dirname(sessions_path)
+            if sessions_dir:
+                os.makedirs(sessions_dir, exist_ok=True)
+
             self._append_rows(
                 sessions_path,
                 session_fields,
@@ -440,6 +447,10 @@ class MetricsCollector:
                 "stb04_dropout_rate",
                 "sample_count",
             ]
+
+            accuracy_dir = os.path.dirname(accuracy_path)
+            if accuracy_dir:
+                os.makedirs(accuracy_dir, exist_ok=True)
 
             self._append_rows(
                 accuracy_path,

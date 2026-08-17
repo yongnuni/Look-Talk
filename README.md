@@ -31,10 +31,6 @@ python -m pip install jamo
 
 pip install scikit-learn
 
-<백본>
-
-pip install torch torchvision onnx onnxruntime huggingface_hub
-
 ## 폴더 구조
 
 ```
