@@ -48,6 +48,8 @@ class MetricsCollector:
             screen_h=None,
             monitor_diagonal_inch=None,
             ridge_enabled=None,
+            # backbone_enabled: 백본 제거됨(2026-08). 호출부(main.py)가 항상 False를
+            # 넘긴다 — 기존 sessions CSV와의 스키마 호환을 위해 컬럼만 유지한다.
             backbone_enabled=None,
     ):
     # 세션 단위 메타데이터 (sessions.csv 한 행)

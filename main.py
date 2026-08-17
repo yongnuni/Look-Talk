@@ -61,8 +61,6 @@ from src.tracking.mappers.factory import (
 from src.tracking.mappers.strategies import available_strategies
 from src.metrics.session_logger import SessionLogger
 
-# ── 하이브리드(백본+릿지) 모듈 ──
-from src.tracking.gaze_backbone import GazeBackbone
 from src.tracking.feature_builder import build_features
 
 from src.keyboard import (
@@ -132,10 +130,6 @@ def auto_brightness(frame):
 
 MAX_SQPNP_DELTA_PX = 120
 
-# 백본 추론 주기 (프레임). CPU 부담을 줄이기 위해 N프레임마다 1회 추론하고
-# 그 사이에는 마지막 시선 벡터를 재사용합니다. 1이면 매 프레임 추론.
-BACKBONE_INFER_EVERY = 2
-
 # 9점 테스트 (개발용)
 
 def run_gaze_accuracy_test(
@@ -148,7 +142,6 @@ def run_gaze_accuracy_test(
     use_pose_corrected,
     use_sqpnp_corrected=False,
     use_ridge=False,
-    backbone=None
 ):
     os.makedirs("gaze_accuracy_results", exist_ok=True)
 
@@ -177,9 +170,6 @@ def run_gaze_accuracy_test(
     ]
 
     results = []
-
-    backbone_frame_count = 0
-    last_gaze_vec = None
 
     for idx, (rx, ry) in enumerate(test_points):
 
@@ -251,18 +241,11 @@ def run_gaze_accuracy_test(
                     fh
                 )
 
-                # ── 하이브리드: 시선 벡터 + 특징 벡터 ──
-                if backbone is not None and backbone.available:
-                    if backbone_frame_count % BACKBONE_INFER_EVERY == 0:
-                        last_gaze_vec = backbone.predict(frame, lms)
-                    backbone_frame_count += 1
-
                 features = build_features(
                     iris_x,
                     iris_y,
                     lms,
                     head_pose,
-                    gaze_vec=last_gaze_vec,
                     frame_width=fw
                 )
 
@@ -767,11 +750,6 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
         detect_intentional=True
     )
 
-    # ── 하이브리드 백본 초기화 ──
-    # 모델 파일이 없거나 onnxruntime 미설치면 available=False로만 남고
-    # 기존 파이프라인은 그대로 동작합니다 (릿지는 기하 특징만으로 학습됨).
-    backbone = GazeBackbone()
-
     is_korean = True
     is_shift = False
     show_all_markers = False   # b 키로 토글: 후보 좌표를 동시에 마커로 표시
@@ -794,10 +772,6 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
     last_gaze_x = SCREEN_W // 2
     last_gaze_y = SCREEN_H // 2
-
-    # 백본 추론 스로틀링 상태
-    backbone_frame_count = 0
-    last_gaze_vec = None
 
     # 메인 루프 프레임 카운터 (SessionLogger와는 별개 - 4단계에서
     # SessionLogger 스키마를 올릴 때 같은 값을 공유시킬 예정).
@@ -951,20 +925,13 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 blink = blink_detector.is_closed
                 conf = iris_confidence(lms)                
                 
-                # ── 하이브리드: 시선 벡터 추론 (스로틀링) + 특징 벡터 ──
                 # 캘리브레이션 단계에서도 릿지 학습용 특징을 쌓아야 하므로
                 # calibrator.done 여부와 무관하게 여기서 계산합니다.
-                if backbone.available:
-                    if backbone_frame_count % BACKBONE_INFER_EVERY == 0:
-                        last_gaze_vec = backbone.predict(frame, lms)
-                    backbone_frame_count += 1
-
                 features = build_features(
                     iris_x,
                     iris_y,
                     lms,
                     head_pose,
-                    gaze_vec=last_gaze_vec,
                     frame_width=fw
                 )
 
@@ -1673,12 +1640,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         2
                     )
 
-                    # ── 릿지/백본 상태 표시 ──
-                    if last_gaze_vec is not None:
-                        gaze_vec_text = f"GazeVec:({last_gaze_vec[0]:.1f},{last_gaze_vec[1]:.1f})"
-                    else:
-                        gaze_vec_text = "GazeVec:(None)"
-
+                    # ── 릿지 상태 표시 ──
                     ridge_sx, ridge_sy = (
                         (mapping_result.candidates.get("ridge_hybrid") or (None, None))
                         if mapping_result is not None else (None, None)
@@ -1686,8 +1648,6 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
                     ridge_status_text = (
                         f"Ridge: {'FIT' if mapper.calibrator.ridge.fitted else 'NOT_FIT'} "
-                        f"Backbone: {'ON' if backbone.available else 'OFF'} "
-                        f"{gaze_vec_text} "
                         f"RidgeXY:({ridge_sx},{ridge_sy})"
                     )
 
@@ -1969,11 +1929,12 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         screen_w=SCREEN_W,
                         screen_h=SCREEN_H,
                         monitor_diagonal_inch=MONITOR_DIAGONAL_INCH,
-                        # ridge_enabled/backbone_enabled: config 값이 아니라 이
-                        # 프로세스에서 선택 기능이 실제로 활성화됐는지(=필요한
-                        # 라이브러리를 import할 수 있었는지)를 담는다.
+                        # ridge_enabled: config 값이 아니라 이 프로세스에서 릿지가
+                        # 실제로 활성화됐는지(=sklearn을 import할 수 있었는지)를 담는다.
                         ridge_enabled=mapper.calibrator.ridge.sklearn_available(),
-                        backbone_enabled=backbone.available,
+                        # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
+                        # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
+                        backbone_enabled=False,
 
                         # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
                         calib_id=(
@@ -2017,7 +1978,6 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         use_pose_corrected,
                         use_sqpnp_corrected,
                         use_ridge=use_ridge,
-                        backbone=backbone
                     )
                     cheonjiin_composer.reset()
 
@@ -2055,7 +2015,9 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                     if hasattr(mapper, "calibrator")
                     else None
                 ),
-                backbone_enabled=backbone.available,
+                # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
+                # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
+                backbone_enabled=False,
             )
             # 9점 테스트가 없었던 실행이므로 __init__이 발급한 test_id는
             # 실제로 일어나지 않은 테스트를 가리키게 된다 — 결측으로 남긴다.
