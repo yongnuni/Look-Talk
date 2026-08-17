@@ -73,3 +73,8 @@ CALIB_STD_Y = 0.008
 
 FIXATION_RADIUS = 40
 FIXATION_FRAMES = 6
+
+# ── 릿지 회귀 설정 ─────────────────────────────────────────────
+
+RIDGE_ALPHA = 1.0   # 릿지 회귀 정규화 계수
+RIDGE_DEGREE = 2    # 릿지 회귀 다항 특징 차수

@@ -39,20 +39,9 @@ from src.config import (
     MONITOR_DIAGONAL_INCH,
     SCREEN_W,
     SCREEN_H,
+    RIDGE_ALPHA,
+    RIDGE_DEGREE,
 )
-
-# config.py에 없으면 calibration.py의 fallback과 동일한 값을 등재한다
-# (src/tracking/calibration.py:24-32의 try/except와 동일한 패턴 — 이 파일은
-# calibration.py를 import하지 않고 값만 그대로 옮겨 적는다).
-try:
-    from src.config import RIDGE_ALPHA
-except ImportError:
-    RIDGE_ALPHA = 1.0  # calibration.py fallback과 동일 (src/tracking/calibration.py:24-27)
-
-try:
-    from src.config import RIDGE_DEGREE
-except ImportError:
-    RIDGE_DEGREE = 2  # calibration.py fallback과 동일 (src/tracking/calibration.py:29-32)
 
 
 def build_snapshot():
