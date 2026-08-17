@@ -89,7 +89,7 @@ def build_snapshot():
         "max_calib_rmse_px": 150.0,           # src/tracking/calibration.py:615
         "mouth_mar_threshold": 0.30,          # src/tracking/mouth.py:64
         "mouth_hold_time_sec": 0.3,           # src/tracking/mouth.py:65
-        "cheonjiin_repeat_timeout_sec": 2.5,  # src/cheonjiin.py:93
+        "cheonjiin_repeat_timeout_sec": None, # 시간 제한 없는 확정 전 순환
         "targeting_dwell_sec": 1.0,           # main.py:552 (TargetingTestRunner 호출부)
         "targeting_timeout_sec": 5.0,         # main.py:553 (TargetingTestRunner 호출부)
         "targeting_prepare_sec": 2.0,         # tests/targeting_test_runner.py:42 (클래스 기본값 — main.py 호출부는 이 인자를 넘기지 않는다)

@@ -1,4 +1,3 @@
-import time
 from typing import Optional
 
 import src.hangul as hangul
@@ -85,19 +84,20 @@ class CheonjiinComposer:
     """
     천지인 물리 키를 실제 한글 자모로 변환한다.
 
-    - 같은 자음 키를 제한시간 내 다시 선택하면 다음 자음으로 변경
+    - 같은 자음 키를 다시 선택하면 시간 제한 없이 다음 자음으로 변경
     - ㅣ, ㆍ, ㅡ 입력 순서를 실제 모음으로 변환
     - 최종 음절 조합은 기존 src.hangul.add_jamo()에 위임
     """
 
-    def __init__(self, repeat_timeout_sec: float = 2.5):
-        self.repeat_timeout_sec = repeat_timeout_sec
-
+    def __init__(
+        self,
+        repeat_timeout_sec: Optional[float] = None
+    ):
+        # 기존 생성자 호출 호환을 위해 인자는 받되, 순환 판정에는 사용하지 않는다.
         self.last_consonant_key: Optional[str] = None
         self.last_consonant: Optional[str] = None
         self.last_consonant_position: Optional[str] = None
         self.last_cycle_index = 0
-        self.last_input_time = 0.0
 
         self.vowel_tokens: list[str] = []
         self.last_emitted_vowel: Optional[str] = None
@@ -120,6 +120,42 @@ class CheonjiinComposer:
             return True
 
         return False
+
+    def has_uncommitted_input(self) -> bool:
+        """스페이스로 확정할 천지인 입력 상태가 있는지 반환한다."""
+
+        return bool(
+            self.last_consonant is not None
+            or self.vowel_tokens
+            or any(hangul.jamo_buffer)
+        )
+
+    def commit(self) -> bool:
+        """현재 후보와 한글 조합을 확정하고 천지인 입력 상태를 비운다.
+
+        확정할 입력이 있었다면 True를 반환한다. 독립 모음은 기존
+        hangul.flush_buffer()가 저장하지 않으므로 화면에 보이는 조합 문자열을
+        직접 finalText로 옮긴다. 아직 실제 모음으로 변환되지 않은 ㆍ 계열
+        미리보기도 같은 방식으로 보존한다.
+        """
+
+        if not self.has_uncommitted_input():
+            return False
+
+        composed_text = hangul.compose_jamo_buffer()
+        pending_preview = self.get_pending_preview()
+
+        if composed_text:
+            hangul.finalText += composed_text
+
+        if pending_preview:
+            hangul.finalText += pending_preview
+
+        hangul.jamo_buffer[:] = ['', '', '']
+        self.reset()
+
+        return True
+
     def get_pending_preview(self) -> str:
         """
         아직 완성된 모음으로 변환되지 않은 천지인 요소를
@@ -156,15 +192,12 @@ class CheonjiinComposer:
         return None
 
     def _input_consonant(self, key: str) -> str:
-        now = time.monotonic()
-
         # 자음을 선택하면 진행 중이던 모음 요소 조합은 종료한다.
         self._reset_vowel_state()
 
         is_repeat = (
             key == self.last_consonant_key
             and self.last_consonant is not None
-            and now - self.last_input_time <= self.repeat_timeout_sec
         )
 
         if is_repeat:
@@ -184,11 +217,12 @@ class CheonjiinComposer:
             ):
                 self.last_cycle_index = next_index
                 self.last_consonant = replacement
-                self.last_input_time = now
 
                 return replacement
 
-        # 첫 선택 또는 제한시간이 지난 뒤의 새 입력
+        # 첫 선택 또는 다른 키의 새 입력. 기존 후보의 순환 상태를 먼저
+        # 종료하되 한글 버퍼는 그대로 두어 기존 음절/받침 조합을 유지한다.
+        self._reset_consonant_state()
         consonant = INITIAL_CONSONANT_CYCLES[key][0]
 
         hangul.add_jamo(consonant)
@@ -201,7 +235,6 @@ class CheonjiinComposer:
         self.last_consonant = consonant
         self.last_consonant_position = position
         self.last_cycle_index = 0
-        self.last_input_time = now
 
         return consonant
 
@@ -317,7 +350,6 @@ class CheonjiinComposer:
         self.last_consonant = None
         self.last_consonant_position = None
         self.last_cycle_index = 0
-        self.last_input_time = 0.0
 
     def _reset_vowel_state(self) -> None:
         self.vowel_tokens = []
