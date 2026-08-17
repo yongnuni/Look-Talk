@@ -410,32 +410,19 @@ def drawAll(
 
     for button in buttonList:
 
-        x, y = button.pos
-        w, h = button.size
+        rect = button.rect
+        x, y = rect.x, rect.y
+        w, h = rect.width, rect.height
 
         key = button.text
 
-        on_key = (
-            x < gaze_x < x+w
-            and
-            y < gaze_y < y+h
-        )
+        on_key = rect.contains(gaze_x, gaze_y)
 
         # 기본 크기
         nx = x
         ny = y
         nw = w
         nh = h
-
-        # k키 모드일 때만 확대
-        if on_key and not show_cursor:
-            scale = 1.20
-
-            nw = int(w * scale)
-            nh = int(h * scale)
-
-            nx = x - (nw - w) // 2
-            ny = y - (nh - h) // 2
 
         text_color = KEY_TEXT_COLOR
 
@@ -508,7 +495,7 @@ def drawAll(
             )
 
         draw.rounded_rectangle(
-            [nx, ny, nx+nw, ny+nh],
+            rect.pillow_bbox(),
             radius=radius,
             fill=bg_color,
             outline=border_color,
@@ -526,13 +513,14 @@ def drawAll(
             bar_w = int(
                 w * dwell_ratio
             )
+            bar_right = nx + max(1, min(nw, bar_w)) - 1
 
             draw.rounded_rectangle(
                 [
                     nx,
                     ny+nh-6,
-                    nx+bar_w,
-                    ny+nh
+                    bar_right,
+                    ny+nh-1
                 ],
                 radius=3,
                 fill=PROGRESS_BAR_COLOR
