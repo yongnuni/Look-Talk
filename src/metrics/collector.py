@@ -12,6 +12,7 @@
 """
 
 import math
+import os
 import statistics
 from datetime import datetime, timezone
 
@@ -413,6 +414,10 @@ class MetricsCollector:
                 "schema_version": self.SCHEMA_VERSION,
             }
 
+            sessions_dir = os.path.dirname(sessions_path)
+            if sessions_dir:
+                os.makedirs(sessions_dir, exist_ok=True)
+
             self._append_rows(
                 sessions_path,
                 session_fields,
@@ -442,6 +447,10 @@ class MetricsCollector:
                 "stb04_dropout_rate",
                 "sample_count",
             ]
+
+            accuracy_dir = os.path.dirname(accuracy_path)
+            if accuracy_dir:
+                os.makedirs(accuracy_dir, exist_ok=True)
 
             self._append_rows(
                 accuracy_path,
