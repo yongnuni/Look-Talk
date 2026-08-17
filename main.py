@@ -823,6 +823,9 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
     hover_start_ts_ms = None
     hover_start_key = None
 
+    # main() 재호출 또는 레이아웃 변경 전 실행에서 남은 천지인 후보를 제거한다.
+    cheonjiin_composer.reset()
+
     if keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN:
         buttonList = create_cheonjiin_buttons()
     else:
@@ -1200,6 +1203,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         # 10회 완료 시점(이 attempt로 completed=True가 된 프레임)에
                         # 딱 한 번만 저장한다.
                         if targeting_runner.completed:
+                            cheonjiin_composer.reset()
                             export_targeting_results(
                                 run_id,
                                 keyboard_layout,
@@ -1258,6 +1262,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         )
                     targeting_mode = False
                     targeting_runner.reset()
+                    cheonjiin_composer.reset()
                     dwell.reset()
                     mouth.reset()
                     hover_start_ts_ms = None
@@ -1270,6 +1275,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
                 # 결과 화면 또는 진행 중 Y 키를 누르면 처음부터 재시작
                 elif targeting_key == ord('y'):
+                    cheonjiin_composer.reset()
                     targeting_runner.start()
                     dwell.reset()
                     mouth.reset()
@@ -1540,6 +1546,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
 
                 hangul.finalText = ""
                 hangul.jamo_buffer[:] = ['', '', '']
+                cheonjiin_composer.reset()
 
             if gaze_x < 0 or gaze_y < 0:
                 gaze_x = last_gaze_x
@@ -1922,6 +1929,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 print()
 
             elif key == ord('y'):
+                cheonjiin_composer.reset()
                 targeting_runner.start()
                 targeting_mode = True
 
@@ -2012,6 +2020,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         ),
                     )
 
+                    cheonjiin_composer.reset()
                     run_gaze_accuracy_test(
                         cap,
                         face_mesh,
@@ -2024,6 +2033,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         use_ridge=use_ridge,
                         backbone=backbone
                     )
+                    cheonjiin_composer.reset()
 
                     last_test_id = collector.test_id
 
@@ -2093,6 +2103,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
             if collector is not None and last_test_id is None:
                 last_test_id = collector.test_id
 
+    cheonjiin_composer.reset()
     session_logger.close()
     input_event_logger.close()
 

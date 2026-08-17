@@ -7,6 +7,8 @@
 처음부터 오염된다.
 """
 
+import time
+
 import pytest
 
 import src.hangul as hangul
@@ -16,8 +18,11 @@ from src.keyboard import (
     _diff_tail,
     KEYBOARD_LAYOUT_QWERTY,
     KEYBOARD_LAYOUT_CHEONJIIN,
+    DISPLAY_LABELS,
     keys_kor_normal,
     create_buttons,
+    create_function_buttons,
+    create_cheonjiin_function_buttons,
 )
 from src.metrics.derive_input import replay_deltas as _replay
 
@@ -160,3 +165,198 @@ def test_cheonjiin_pending_vowel_preview_included_in_diff():
 
     assert (deleted, inserted) == (0, "ㆍ")
     assert _cheonjiin_composite() == "ㆍ"
+
+
+# ── 천지인: 시간 제한 없는 자음 순환과 명시적 확정 ──────────────
+
+
+def test_cheonjiin_same_consonant_cycles_after_more_than_2_5_seconds():
+    button_list = create_buttons(keys_kor_normal)
+
+    process_key(
+        "ㅇㅁ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+    assert _cheonjiin_composite() == "ㅇ"
+
+    time.sleep(2.6)
+
+    _, _, _, deleted, inserted = process_key(
+        "ㅇㅁ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+
+    assert (deleted, inserted) == (1, "ㅁ")
+    assert _cheonjiin_composite() == "ㅁ"
+
+
+def test_cheonjiin_space_commits_then_next_space_inserts_blank():
+    button_list = create_buttons(keys_kor_normal)
+
+    process_key(
+        "ㅇㅁ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+    _, _, _, first_deleted, first_inserted = process_key(
+        " ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+
+    assert (first_deleted, first_inserted) == (0, "")
+    assert hangul.finalText == "ㅇ"
+    assert hangul.jamo_buffer == ['', '', '']
+    assert not cheonjiin_composer.has_uncommitted_input()
+
+    _, _, _, second_deleted, second_inserted = process_key(
+        " ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+
+    assert (second_deleted, second_inserted) == (0, " ")
+    assert hangul.finalText == "ㅇ "
+
+
+def test_cheonjiin_space_commits_independent_vowel_without_blank():
+    button_list = create_buttons(keys_kor_normal)
+
+    process_key(
+        "ㅣ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+    process_key(
+        " ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+
+    assert hangul.finalText == "ㅣ"
+    assert hangul.jamo_buffer == ['', '', '']
+
+
+def test_cheonjiin_space_commits_jongsung_candidate_without_blank():
+    button_list = create_buttons(keys_kor_normal)
+    is_korean, is_shift = True, False
+
+    for key in ["ㅇㅁ", "ㅣ", "ㄱㅋ", " "]:
+        is_korean, is_shift, button_list, _, _ = process_key(
+            key,
+            is_korean,
+            is_shift,
+            button_list,
+            KEYBOARD_LAYOUT_CHEONJIIN,
+        )
+
+    assert hangul.finalText == "익"
+    assert hangul.jamo_buffer == ['', '', '']
+
+
+def test_cheonjiin_different_character_commits_previous_cycle_candidate():
+    button_list = create_buttons(keys_kor_normal)
+
+    process_key(
+        "ㅇㅁ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+    process_key(
+        "ㄱㅋ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+
+    assert hangul.finalText == "ㅇ"
+    assert hangul.jamo_buffer == ["ㄱ", "", ""]
+    assert _cheonjiin_composite() == "ㅇㄱ"
+
+    process_key(
+        "ㄱㅋ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+    assert _cheonjiin_composite() == "ㅇㅋ"
+
+
+def test_cheonjiin_backspace_clears_stale_cycle_state():
+    button_list = create_buttons(keys_kor_normal)
+
+    for key in ["ㅇㅁ", "Del", "ㅇㅁ"]:
+        process_key(
+            key, True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+        )
+
+    assert _cheonjiin_composite() == "ㅇ"
+
+
+def test_cheonjiin_confirm_clears_stale_cycle_state():
+    button_list = create_buttons(keys_kor_normal)
+
+    for key in ["ㅇㅁ", "확인", "ㅇㅁ"]:
+        process_key(
+            key, True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+        )
+
+    assert _cheonjiin_composite() == "ㅇㅇ"
+
+
+def test_keyboard_layout_change_clears_cheonjiin_cycle_state():
+    button_list = create_buttons(keys_kor_normal)
+
+    process_key(
+        "ㅇㅁ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+    process_key(
+        "Del", True, False, button_list, KEYBOARD_LAYOUT_QWERTY
+    )
+    process_key(
+        "ㅇㅁ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+
+    assert _cheonjiin_composite() == "ㅇ"
+
+
+def test_cheonjiin_language_mode_change_clears_cycle_state():
+    button_list = create_buttons(keys_kor_normal)
+
+    is_korean, is_shift, button_list, _, _ = process_key(
+        "ㅇㅁ", True, False, button_list, KEYBOARD_LAYOUT_CHEONJIIN
+    )
+    is_korean, is_shift, button_list, _, _ = process_key(
+        "한/영",
+        is_korean,
+        is_shift,
+        button_list,
+        KEYBOARD_LAYOUT_CHEONJIIN,
+    )
+    is_korean, is_shift, button_list, _, _ = process_key(
+        "한/영",
+        is_korean,
+        is_shift,
+        button_list,
+        KEYBOARD_LAYOUT_CHEONJIIN,
+    )
+    process_key(
+        "ㅇㅁ",
+        is_korean,
+        is_shift,
+        button_list,
+        KEYBOARD_LAYOUT_CHEONJIIN,
+    )
+
+    assert _cheonjiin_composite() == "ㅇㅇ"
+
+
+def test_qwerty_space_behavior_is_unchanged():
+    button_list = create_buttons(keys_kor_normal)
+
+    process_key(
+        "ㅇ", True, False, button_list, KEYBOARD_LAYOUT_QWERTY
+    )
+    process_key(
+        " ", True, False, button_list, KEYBOARD_LAYOUT_QWERTY
+    )
+
+    assert hangul.finalText == "ㅇ "
+
+
+def test_cheonjiin_backspace_label_uses_correct_wording_only_in_that_layout():
+    cheonjiin_delete = next(
+        button
+        for button in create_cheonjiin_function_buttons()
+        if button.text == "Del"
+    )
+    qwerty_delete = next(
+        button
+        for button in create_function_buttons()
+        if button.text == "Del"
+    )
+
+    assert cheonjiin_delete.text == "Del"
+    assert cheonjiin_delete.display_label == "되돌리기"
+    assert qwerty_delete.display_label is None
+    assert DISPLAY_LABELS["Del"] == "뒤돌리기"
