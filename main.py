@@ -6,9 +6,8 @@ import math
 import time
 import os
 from datetime import datetime
-from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline, load_baseline
-from src.tracking.blink import BlinkDetector, BlinkKind
+from src.tracking.blink import BlinkDetector
 import src.viz.viz as viz
 import matplotlib.pyplot as plt
 from src.cheonjiin import cheonjiin_composer
@@ -90,11 +89,11 @@ from src.ui import (
     draw_mouth_calibration_screen,
     draw_targeting_test_screen,
     draw_targeting_result_screen,
-    font
 )
 
 from tests.test_runner import TestRunner
 from tests.targeting_test_runner import TargetingTestRunner
+from src.metrics.collector import MetricsCollector
 
 def auto_brightness(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -130,8 +129,6 @@ def auto_brightness(frame):
         lab,
         cv2.COLOR_LAB2BGR
     )
-
-from src.metrics.collector import MetricsCollector
 
 MAX_SQPNP_DELTA_PX = 120
 
