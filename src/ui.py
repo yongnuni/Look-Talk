@@ -538,7 +538,10 @@ def drawAll(
                 fill=PROGRESS_BAR_COLOR
             )
 
-        label = DISPLAY_LABELS.get(key, key)
+        label = (
+            button.display_label
+            or DISPLAY_LABELS.get(key, key)
+        )
 
         current_key_font = (
             function_key_font

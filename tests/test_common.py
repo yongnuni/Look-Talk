@@ -110,6 +110,7 @@ def test_build_snapshot_contains_all_registered_keys():
     snapshot = config_snapshot.build_snapshot()
     assert expected_keys <= set(snapshot.keys())
     assert "keyboard_layout" not in snapshot
+    assert snapshot["cheonjiin_repeat_timeout_sec"] is None
 
 
 def test_build_snapshot_excludes_px_per_cm():

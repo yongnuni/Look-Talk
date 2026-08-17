@@ -82,12 +82,14 @@ class Button:
         pos,
         text,
         size=None,
-        font_role="default"
+        font_role="default",
+        display_label=None
     ):
         self.pos = pos
         self.size = size or [85, 85]
         self.text = text
         self.font_role = font_role
+        self.display_label = display_label
 
 
 def _clamp(value, lo, hi):
@@ -422,7 +424,7 @@ def create_cheonjiin_function_buttons(layout=None):
     천지인 하단 기능키를 생성한다.
 
     배치 순서:
-    한/영 → 스페이스 → 뒤돌리기
+    한/영 → 스페이스 → 되돌리기
 
     내부 판정값은 기존 process_key와의 호환을 위해
     '한/영', ' ', 'Del'을 그대로 사용한다.
@@ -477,7 +479,8 @@ def create_cheonjiin_function_buttons(layout=None):
             [delete_x, y],
             "Del",
             size=[delete_w, row_h],
-            font_role="function_small"
+            font_role="function_small",
+            display_label="되돌리기"
         ),
     ]
 
@@ -567,6 +570,11 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
         keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
     )
 
+    # QWERTY로 레이아웃이 바뀐 뒤 천지인 순환 후보가 남지 않게 한다.
+    # QWERTY의 실제 입력 분기는 아래 기존 로직을 그대로 사용한다.
+    if not is_cheonjiin:
+        cheonjiin_composer.reset()
+
     composite_before = _composite_text(is_korean, keyboard_layout)
 
     if (
@@ -619,6 +627,28 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
             deleted_count,
             inserted_text
             )
+
+    # 천지인 조합/후보가 있으면 첫 스페이스는 확정 키로만 사용한다.
+    # commit()이 상태와 한글 버퍼를 비우므로 다음 스페이스는 아래 기존
+    # 공백 입력 분기로 내려간다.
+    if (
+        is_cheonjiin
+        and is_korean
+        and key == " "
+        and cheonjiin_composer.commit()
+    ):
+        deleted_count, inserted_text = _diff_tail(
+            composite_before,
+            _composite_text(is_korean, keyboard_layout)
+        )
+
+        return (
+            is_korean,
+            is_shift,
+            buttonList,
+            deleted_count,
+            inserted_text
+        )
 
     # 스페이스, 한/영, 확인, 되돌리기 등 기능키를 선택하면
     # 자음 연타 및 모음 요소 입력 상태를 종료한다.
