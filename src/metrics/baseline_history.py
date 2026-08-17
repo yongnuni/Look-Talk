@@ -23,11 +23,17 @@ def append_mouth_baseline_history(run_id, saved_path):
 
     fieldnames = ["run_id", "ts_ms", "saved_at"] + list(mouth_result.keys())
 
+    path = os.path.join(
+        "calibration_results",
+        "mouth_baseline_history_v2.0.csv"
+    )
+
+    history_dir = os.path.dirname(path)
+    if history_dir:
+        os.makedirs(history_dir, exist_ok=True)
+
     append_rows(
-        os.path.join(
-            "calibration_results",
-            "mouth_baseline_history_v2.0.csv"
-        ),
+        path,
         fieldnames,
         [row],
     )
