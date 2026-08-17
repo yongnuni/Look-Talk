@@ -55,10 +55,7 @@ from src.tracking.mappers.factory import (
     create_mapper,
     MODE_CALIBRATED,
     MODE_NO_CALIBRATION,
-    AVAILABLE_MODES,
-    DEFAULT_NO_CALIBRATION_STRATEGY,
 )
-from src.tracking.mappers.strategies import available_strategies
 from src.metrics.session_logger import SessionLogger
 
 from src.tracking.feature_builder import build_features
@@ -93,6 +90,7 @@ from tests.test_runner import TestRunner
 from tests.targeting_test_runner import TargetingTestRunner
 from src.metrics.collector import MetricsCollector
 from src.vision.preprocessing import auto_brightness
+from src.app.cli import parse_args
 
 MAX_SQPNP_DELTA_PX = 120
 
@@ -2019,85 +2017,13 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
         show_session_popup(last_test_id)
 
 
-def _parse_args():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Look-Talk Eye Keyboard")
-
-    parser.add_argument(
-        "--gaze-mode",
-        dest="gaze_mode",
-        choices=list(AVAILABLE_MODES),
-        default=MODE_CALIBRATED,
-        help=(
-            "시선 매핑 모드. 'calibrated'(기본값)는 기존 16점 캘리브레이션을 "
-            "사용하고, 'no_calibration'은 캘리브레이션 화면 없이 바로 "
-            "키보드로 진입한다."
-        ),
-    )
-
-    parser.add_argument(
-        "--strategy",
-        dest="strategy",
-        default=None,
-        help=(
-            "no_calibration 모드에서 사용할 strategy 이름. 생략하면 "
-            f"기본값('{DEFAULT_NO_CALIBRATION_STRATEGY}')을 사용한다. "
-            f"사용 가능한 strategy: {', '.join(available_strategies()) or '(없음)'}"
-        ),
-    )
-
-    parser.add_argument(
-        "--keyboard-layout",
-        dest="keyboard_layout",
-        choices=[
-            KEYBOARD_LAYOUT_QWERTY,
-            KEYBOARD_LAYOUT_CHEONJIIN,
-        ],
-        default=KEYBOARD_LAYOUT_QWERTY,
-        help=(
-            "키보드 배열. 'qwerty'는 기존 쿼티 배열이며, "
-            "'cheonjiin'은 천지인 3×4 배열을 사용한다."
-        ),
-    )
-
-    parser.add_argument(
-        "--user-id",
-        dest="user_id",
-        default="yejin",
-        help=(
-            "sessions.csv 등에 기록될 참가자 식별자. 팀원별로 실행 결과를 "
-            "구분하려면 실행 시 지정한다(기본값은 기존 동작과 동일하게 "
-            "'yejin' 고정값을 유지)."
-        ),
-    )
-
-    args = parser.parse_args()
-
-    if args.gaze_mode == MODE_NO_CALIBRATION:
-        name = args.strategy or DEFAULT_NO_CALIBRATION_STRATEGY
-        if name not in available_strategies():
-            available = ", ".join(available_strategies()) or "(없음)"
-            parser.error(
-                f"'{name}'은(는) 등록된 no_calibration strategy가 아닙니다. "
-                f"사용 가능한 strategy: {available}"
-            )
-
-    return (
-        args.gaze_mode,
-        args.strategy,
-        args.keyboard_layout,
-        args.user_id
-    )
-
-
 if __name__ == "__main__":
     (
         _mode,
         _strategy_name,
         _keyboard_layout,
         _user_id
-    ) = _parse_args()
+    ) = parse_args()
 
     main(
         mode=_mode,
