@@ -1,132 +1,231 @@
 📚 [팀노션](https://app.notion.com/p/31d7635a991d83b995cb01378ede55c7?source=copy_link)
 
+## 프로젝트 소개
 
-## requirement
+Look Talk은 웹캠만으로 시선을 추적해 한글을 입력하는 AAC(보완대체의사소통) 키보드입니다. ALS 등 중증 운동장애로 손을 쓰기 어려운 사용자가 별도의 고가 장비 없이 일반 노트북/웹캠 환경에서 의사소통할 수 있게 하는 것이 목표입니다. dwell(응시 유지) 클릭과 입벌림(MAR) 클릭, 두 가지 입력 방식을 지원합니다. 동시에 입력 과정에서 시선 정확도·안정성·타건(tap) 로그 등 평가 지표를 함께 수집해, 입력 방식과 파라미터를 정량적으로 비교·개선하는 것도 이 프로젝트의 핵심 목적입니다.
 
-<Python 3.12.10>
+## Tech Stack
 
-* Python 3.13은 사용하지 말 것!(해당 버전은 mediapipe를 사용할 수 없음)
+- **Python 3.12**
+- **MediaPipe** — 얼굴/홍채 랜드마크 추출
+- **OpenCV** (opencv-contrib-python) — 영상 캡처 및 화면 렌더링
+- **NumPy / Pandas** — 수치 계산 및 CSV 처리
+- **Pillow** — 한글 폰트 렌더링
+- **Matplotlib** — 지표 시각화
+- **jamo** — 한글 자모 조합
+- **scikit-learn** (선택) — 릿지 회귀 기반 하이브리드(`ridge_hybrid`) 매핑에 사용. 미설치 시 동일한 수식의 numpy 폐형해(closed-form)로 자동 대체되어 동작 자체는 유지됩니다.
+- **pytest** — 테스트 (개발용)
 
-<가상환경 생성>
+## Getting Started
 
+### Python 버전
+
+**Python 3.12 필수.**
+Python 3.13은 사용 불가 — MediaPipe가 3.13을 지원하지 않습니다.
+
+### 1. 가상환경 생성 (Windows PowerShell 기준)
+
+```powershell
 py -3.12 -m venv .venv
-
 .\.venv\Scripts\Activate.ps1
+```
 
-<라이브러리 설치>
+### 2. 의존성 설치
 
-python -m pip install mediapipe==0.10.20
+```powershell
+pip install -r requirements.txt
+```
 
-python -m pip install opencv-python==4.11.0.86
+(선택) 릿지 회귀 매핑 사용 시:
 
-python -m pip install opencv-contrib-python==4.11.0.86
-
-python -m pip install numpy==1.26.4
-
-python -m pip install pillow
-
-python -m pip install jamo
-
-<릿지>
-
+```powershell
 pip install scikit-learn
+```
+
+## 실행 방법
+
+```powershell
+python main.py [--gaze-mode calibrated|no_calibration] [--strategy 이름] [--keyboard-layout qwerty|cheonjiin] [--user-id 이름]
+```
+
+| 옵션 | 기본값 | 선택지 | 설명 |
+|---|---|---|---|
+| `--gaze-mode` | `calibrated` | `calibrated`, `no_calibration` | 시선 매핑 모드. `calibrated`는 16점 캘리브레이션을 거치고, `no_calibration`은 캘리브레이션 화면 없이 바로 키보드로 진입한다. |
+| `--strategy` | `head_pose_relative_iris` | 등록된 strategy 이름(현재 `head_pose_relative_iris` 1개뿐) | `--gaze-mode no_calibration`일 때만 사용하는 좌표 추정 전략. |
+| `--keyboard-layout` | `qwerty` | `qwerty`, `cheonjiin` | 키보드 배열. |
+| `--user-id` | `yejin` | 자유 문자열 | 결과 CSV(`sessions.csv` 등)에 기록될 참가자 식별자. 지정하지 않으면 모든 로그가 `yejin`으로 기록된다. |
+
+## 키보드 단축키
+
+`main.py`의 키 입력 분기를 기준으로 정리했습니다. 화면 상태에 따라 동작하는 키가 다릅니다.
+
+### 메인 화면 (일반 사용 중)
+
+| 키 | 동작 |
+|---|---|
+| `q` | 종료 |
+| `r` | 재캘리브레이션/리셋 |
+| `p` | pose_corrected 매핑 토글 (`calibrated` 모드 전용) |
+| `h` | sqpnp_corrected 매핑 토글 (`calibrated` 모드 전용) |
+| `g` | ridge_hybrid 매핑 토글 (`calibrated` 모드 전용) |
+| `o` | raw 매핑으로 전환 (`calibrated` 모드 전용) |
+| `b` | 후보 좌표 마커 토글 |
+| `d` | 디버그 오버레이 토글 |
+| `k` | 시선 커서 표시/숨김 토글 |
+| `m` | 입벌림 입력 모드 진입 (개인별 MAR 캘리브레이션 시작) |
+| `y` | 10회 원형 타겟팅 테스트 시작 |
+| `t` | 9점 시선 정확도 테스트 (`calibrated` 모드에서 캘리브레이션 완료 후에만 동작) |
+
+### 캘리브레이션 / 입벌림 캘리브레이션 화면
+
+| 키 | 동작 |
+|---|---|
+| `q` | 종료 |
+| `r` | 진행 중인 해당 캘리브레이션만 리셋 |
+
+그 외 키는 이 화면에서 동작하지 않습니다.
+
+### 타겟팅 테스트 화면 (`y`로 진입 후)
+
+| 키 | 동작 |
+|---|---|
+| `q` | 종료 |
+| `ESC` | 타겟팅 테스트 종료, 키보드 화면으로 복귀 |
+| `y` | 10회 타겟팅 테스트를 처음부터 재시작 |
+
+이 화면에서는 일반 키보드 입력이 비활성화됩니다.
 
 ## 폴더 구조
 
 ```
 Look-Talk/
-├── main.py                          # 앱 진입점. 웹캠 캡처→자동 밝기 보정(auto_brightness)→MediaPipe FaceMesh
-│                                     #   →캘리브레이션→시선 파이프라인→dwell/입벌림 클릭→키보드 입력의 메인 루프.
-│                                     #   run_gaze_accuracy_test(9점 테스트)와 종료 시 결과 팝업(show_session_popup)도 포함
-│                                     #   --keyboard-layout 옵션으로 QWERTY/천지인 레이아웃을 선택하며,
-│                                     #   y 키 기반 독립 10회 원형 타겟팅 테스트 실행 흐름 포함
-├── README.md                        # 개발 환경 세팅 가이드 (Python 3.12 venv, mediapipe/opencv 등 설치 명령)
+├── main.py                                   # 앱 진입점, 메인 루프 (약 1,500줄 — 4단계 리팩토링으로 축소)
+├── requirements.txt                          # 런타임 의존성
+├── requirements-dev.txt                      # 테스트(pytest) 의존성
 ├── assets/
-│   └── cursor.png                   # 시선 커서로 그리는 PNG 이미지 (ui.draw_gaze_cursor에서 사용)
-├── calibration_results/
-│   └── baseline.json                # 입벌림 캘리브레이션 결과 저장 파일 (mar_baseline, threshold 등)
-│                                     #   — baseline_manager.save_baseline()의 출력물
-│
+│   └── cursor.png                            # 시선 커서로 그리는 PNG 이미지
+├── docs/                                     # 내부 진단/조사 문서 (git-ignored)
+├── scripts/
+│   ├── verify_stage1.py                      # 1단계(식별자 통합) CSV 정합성 검사
+│   └── gate_stage3.py                        # 3단계(원시 이벤트→파생 지표) 관문 검증
+├── calibration_results/                      # 입벌림 캘리브레이션 산출물 (실행 시 생성, git-ignored)
+├── gaze_accuracy_results/                    # 시선/입력 지표 CSV 산출물 (실행 시 생성, git-ignored)
+├── report/                                   # make_report.py 산출 그래프 (수동 실행 시 생성, git-ignored)
 └── src/
-    ├── cheonjiin.py                 # 천지인 입력 처리 모듈. 자음 연타와 ㅣ·ㆍ·ㅡ 기반 모음 조합,
-    │                                 #   미완성 모음 미리보기 및 되돌리기 상태 관리
-    ├── config.py                    # 전역 상수: 화면 해상도 자동감지, PX_PER_CM(모니터 인치→px/cm 환산),
-    │                                 #   캘리브레이션 16점 좌표, 안정화 시간, dwell/fixation 임계값 등
-    ├── hangul.py                    # 한글 자모 조합 엔진 (초성/중성/종성 상태머신, 겹받침·이중모음 처리, jamo_buffer)
-    ├── keyboard.py                  # 가상 키보드: 레이아웃 정의(한/영×기본/Shift), 버튼 생성·배치, 키 입력 처리(process_key)
-    │                                 #   QWERTY/천지인 레이아웃 선택, 천지인 버튼 생성 및 입력 처리 포함
-    ├── ui.py                        # OpenCV+PIL 렌더링: 카운트다운, 캘리브레이션 화면, 키보드 그리기,
-    │                                 #   시선 커서, 상태바, 테스트 완료 오버레이, 입벌림 캘리브레이션 화면
-    │                                 #   천지인 미완성 입력 표시, 원형 타겟팅 진행 화면 및 결과 화면 포함
+    ├── config.py                             # 전역 상수 (화면 해상도, 캘리브레이션 16점 좌표, dwell/fixation 임계값 등)
+    ├── keyboard.py                           # 가상 키보드 레이아웃·버튼 생성·키 입력 처리(process_key)
+    ├── hangul.py                             # 한글 자모 조합 엔진 (초성/중성/종성 상태머신)
+    ├── cheonjiin.py                          # 천지인 입력 처리 (자음 연타, 모음 조합)
+    ├── ui.py                                 # OpenCV+PIL 렌더링 (캘리브레이션 화면, 키보드, 커서, 오버레이 등)
+    │
+    ├── app/
+    │   └── cli.py                            # CLI 인자 파싱 (parse_args)
+    │
+    ├── vision/
+    │   └── preprocessing.py                  # 자동 밝기 보정 (auto_brightness)
     │
     ├── calibrations/
-    │   ├── baseline_manager.py      # 입벌림 캘리브레이션 결과를 JSON으로 저장/로드
-    │   └── mouth_calibration.py     # 입벌림 캘리브레이션 상태머신 (rest_collect→trial_ready→trial_wait→trial_active→done)
-    │                                # MAR 기준값·활성화 임계값 산출, 성공률/일관성/false trigger율 등 지표 계산
+    │   ├── baseline_manager.py               # 입벌림 캘리브레이션 결과 JSON 저장/로드
+    │   └── mouth_calibration.py              # 입벌림 캘리브레이션 상태머신
     │
     ├── tracking/
-    │   ├── calibration.py           # 16점 홍채→화면 매핑 학습(Homography),
-    │   │                            #   head pose 기반 iris 좌표 보정(compensate_iris_by_head_pose),
-    │   │                            #   STB-11(재투영오차)/STB-12(입력안정성)/STB-13(수집품질) 계산 및 CSV 내보내기
-    │   ├── dwell.py                 # 시선 dwell(응시 유지) 클릭 판정 (hover lock, dwell_ratio)
-    │   │                            #   클릭 후 쿨다운을 적용해 동일 키의 연속 오입력 방지
-    │   ├── eye_tracking.py          # MediaPipe 홍채 좌표 계산, 눈 깜빡임(EAR) 검출, 홍채 추적 신뢰도(iris_confidence), 눈/홍채 시각화
-    │   ├── gaze_pipeline.py         # Kalman 필터 스무딩 + fixation(응시 고정) 감지로 최종 시선 좌표 산출
-    │   │                            #   최근 좌표 이동평균, Dead Zone, 프레임당 최대 이동량 제한을 적용해
-    │   │                            #   미세 흔들림과 순간적인 좌표 튐을 완화
-    │   ├── head_pose.py             # solvePnP/SQPnP 기반 head pose(yaw/pitch/roll/face_scale) 추정
-    │   └── mouth.py                 # 입벌림 비율(MAR) 계산, MouthClickDetector(입벌림 클릭 판정)
-    │                                #   타겟팅 테스트 전환 시 감지 상태를 초기화하는 reset() 포함
+    │   ├── calibration.py                    # 16점 홈그래피 학습 + 릿지 회귀 하이브리드 매핑
+    │   ├── dwell.py                          # 시선 dwell 클릭 판정
+    │   ├── eye_tracking.py                   # 홍채 좌표 계산, 눈 깜빡임(EAR) 검출
+    │   ├── gaze_pipeline.py                  # Kalman 스무딩 + fixation 감지
+    │   ├── head_pose.py                      # solvePnP/SQPnP 기반 head pose 추정
+    │   ├── mouth.py                          # 입벌림 비율(MAR) 계산, 입벌림 클릭 판정
+    │   ├── feature_builder.py                # 릿지 회귀용 특징 벡터 조립
+    │   ├── gaze_mapper.py                    # 매퍼 공통 인터페이스(GazeMapper, MappingResult)
+    │   └── mappers/
+    │       ├── factory.py                    # 매퍼 생성 팩토리 (calibrated / no_calibration)
+    │       ├── calibrated_mapper.py          # 16점 캘리브레이션 매퍼
+    │       ├── no_calibration_mapper.py      # 캘리브레이션 없이 동작하는 매퍼
+    │       └── strategies/                   # no_calibration 모드 좌표 추정 전략 모음
+    │
+    ├── testing/
+    │   ├── gaze_accuracy.py                  # 9점 시선 정확도 테스트, 종료 시 결과 팝업
+    │   └── targeting_export.py               # 원형 타겟팅 테스트 결과 CSV 저장
     │
     ├── metrics/
-    │   ├── collector.py             # MetricsCollector: 9점 테스트 지표 수집 엔진. 타깃별 오차(ACC-06)·
-    │   │                             #   표준편차·STB-01~04(FPS/랜드마크율/얼굴검출실패율/dropout) 계산,
-    │   │                             #   sessions/gaze_accuracy CSV로 export (SCHEMA_VERSION 관리)
-    │   └── csv_export.py            # 여러 모듈이 공용으로 쓰는 CSV append 유틸 (append_rows)
+    │   ├── collector.py                      # MetricsCollector: 9점 테스트 지표 수집·CSV export
+    │   ├── session_logger.py                 # 매 프레임 로그 (SessionLogger)
+    │   ├── input_event_logger.py             # 키 탭 단위 원시 이벤트 로그
+    │   ├── baseline_history.py               # 입벌림 캘리브레이션 이력 CSV append
+    │   ├── tap_logging.py                    # 탭 커밋 이벤트를 InputEventLogger로 전달
+    │   ├── derive_input.py                   # 원시 입력 이벤트에서 지표 사후 파생(replay)
+    │   ├── csv_export.py                     # 공용 CSV append 유틸
+    │   └── pose_agg.py                       # head pose 집계 유틸리티 (테스트에서만 쓰이는 미배선 상태 — 확인 완료)
     │
-    ├── recommendation/               # 전부 빈 파일 (미구현 스텁: models/recommender/scorer)
+    ├── common/
+    │   ├── clock.py                          # 프로세스 전역 단조 시계 (모든 로그 타임스탬프의 단일 출처)
+    │   ├── ids.py                            # run_id/calib_id/test_id 발급
+    │   └── config_snapshot.py                # 실험 조건(파라미터) 스냅샷 + 해시
     │
-    └── viz/
-        ├── viz.py                    # 9점 테스트 결과 시각화 공통 모듈. 데이터 로딩/병합/시간순 정렬,
-        │                             #   최근 N세션 선택, 세션 요약, 오차 지도·오차 막대·세션 추세 그래프
-        ├── calib_viz.py              # 캘리브레이션 품질(STB-11/12/13) 시각화. 재투영오차 지도, 입력 안정성
-        │                             #   막대, 수집 품질 막대, calib_id별 RMSE 추세 그래프
-        └── make_report.py            # CLI 리포트 생성 스크립트. 세션/캘리브레이션 그래프를 PNG로 저장 +
-                                      #   콘솔 요약 출력 (--session, --calib, --calib-trend 옵션 지원)
+    ├── viz/
+    │   ├── viz.py                            # 9점 테스트 결과 시각화 공통 모듈
+    │   ├── calib_viz.py                      # 캘리브레이션 품질 시각화
+    │   └── make_report.py                    # CLI 리포트 생성 스크립트 (PNG 저장)
+    │
+    ├── analysis/                             # 세션/캘리브레이션 진단 배터리, Notion 업로드 등 수동 실행 진단 도구
+    │
+    └── recommendation/                       # 전부 빈 파일 (미구현 스텁)
 
 tests/
-├── test_runner.py                    # TestRunner: 문장 입력 테스트 진행 상태 관리 (키입력 수, 백스페이스, 반응시간, 완료 판정)
-├── targeting_test_runner.py          # 키보드와 독립된 10회 원형 타겟팅 테스트 관리.
-│                                     #   드웰 성공·timeout 실패·입벌림 선택 판정,
-│                                     #   성공/실패 횟수·명중률·평균 반응시간 계산
-└── test_sentences.py                 # 테스트용 문장 목록 (현재 2개: "안녕하세요", "감사합니다")
+├── test_runner.py                            # TestRunner: 문장 입력 테스트 진행 상태 관리
+├── targeting_test_runner.py                  # 10회 원형 타겟팅 테스트 관리
+└── test_sentences.py                         # 테스트용 목표 문장 목록
 ```
 
-## 배포 실행 가이드 (팀원용 초안)
+## 산출 데이터
 
-분산 테스트를 위해 각자 컴퓨터에서 실행할 때 아래 설정 확인 바람.
+`main.py` 실행 중/종료 시 자동으로 생성되는 CSV/JSON입니다. 실제 쓰기 경로를 코드에서 확인해 작성했습니다.
+
+| 파일 | 위치 | 내용 | 생성 시점 |
+|---|---|---|---|
+| `sessions_v1.8.csv` | `gaze_accuracy_results/` | 실행(run) 1회당 메타데이터 1행 | 앱 종료 시 항상 (9점 테스트를 안 했어도 저장) |
+| `gaze_accuracy_v1.8.csv` | `gaze_accuracy_results/` | 9점 테스트 타깃별 오차·STB 지표 | `t` 키로 9점 테스트 실행 시 |
+| `gaze_accuracy_{mode}_%Y%m%d_%H%M%S.csv` | `gaze_accuracy_results/` | 9점 테스트 원시 결과(매핑 모드별) | `t` 키로 9점 테스트 실행 시 |
+| `mapper_session_log_v1.1.csv` | `gaze_accuracy_results/` | 매 프레임 로그 | 상시 (60프레임마다 flush) |
+| `input_events_v1.0.csv` | `gaze_accuracy_results/` | 키 탭 단위 원시 이벤트 | 상시 (30탭마다 flush) |
+| `targeting_results_v1.0.csv` | `gaze_accuracy_results/` | 원형 타겟팅 테스트 결과 (타깃당 1행) | `y` 테스트 완료 또는 `ESC` 중단 시 |
+| `calibration_quality_v1.4.csv` | `gaze_accuracy_results/` | 캘리브레이션 포인트별 재투영오차 등 | 캘리브레이션(`r`) 완료 시 |
+| `baseline.json` | `calibration_results/` | 입벌림 캘리브레이션 최신 결과 (덮어쓰기) | 입벌림 캘리브레이션 완료 시 |
+| `mouth_baseline_history_v2.0.csv` | `calibration_results/` | 입벌림 캘리브레이션 이력 append | 입벌림 캘리브레이션 완료 시 |
+
+### 그 외 산출물
+
+다음은 `main.py` 실행이 아닌 별도 명령의 산출물이며, 실험 결과 제출 대상이 아닙니다.
+
+| 파일 | 위치 | 생성 명령 |
+|---|---|---|
+| `{run_id 앞자리}_overview.png`, `{calib_id 앞자리}_calib_overview.png` 등 | `report/` | `python -m src.viz.make_report` |
+
+## 실험 참여 가이드
+
+분산 테스트를 위해 각자 컴퓨터에서 실행할 때 아래 설정을 확인해 주세요.
 
 ### 1. 실행 전 설정
 
-- **모니터 크기**: `src/config.py`의 `MONITOR_DIAGONAL_INCH`를 자기 모니터의 대각선 인치로 수정한다(위 requirement 섹션 참고). px→cm 환산(`PX_PER_CM`)이 이 값에서 파생되므로, 안 맞추면 정확도 지표(cm 단위)가 왜곡된다.
-- **참가자 식별자(user_id)**: 기본값은 `yejin`으로 고정돼 있다. 다른 사람이 실행한 결과를 구분하려면 실행 시 `--user-id` 옵션을 지정한다:
-  ```
+- **모니터 크기**: `src/config.py`의 `MONITOR_DIAGONAL_INCH`를 자기 모니터의 대각선 인치로 수정합니다. px→cm 환산(`PX_PER_CM`)이 이 값에서 파생되므로, 안 맞추면 정확도 지표(cm 단위)가 왜곡됩니다.
+- **참가자 식별자(`--user-id`)**: 기본값은 `yejin`으로 고정되어 있습니다. 다른 사람이 실행한 결과를 구분하려면 실행 시 반드시 지정하세요.
+  ```powershell
   python main.py --user-id <자기이름>
   ```
-  지정하지 않으면 sessions.csv 등 모든 로그에 `yejin`으로 기록되니, 팀원별 결과를 CSV 하나에서 구분해야 한다면 반드시 지정한다.
+  지정하지 않으면 `sessions.csv` 등 모든 로그에 `yejin`으로 기록되어, 팀원별 결과를 CSV 하나에서 구분할 수 없게 됩니다.
 
 ### 2. 실행 순서
 
-```
+```powershell
 python main.py [--keyboard-layout qwerty|cheonjiin] [--user-id <이름>]
 ```
 
-1. 캘리브레이션 화면에서 16점을 순서대로 응시(캘리브레이션 자동 진행)
-2. 캘리브레이션 완료 후 나오는 가상 키보드로 화면 상단에 표시된 목표 문장을 끝까지 입력(dwell 또는 입벌림 클릭으로 키 선택, 백스페이스 포함해도 무방 — 오히려 오타율 지표 수집에 도움이 됨)
-3. `t`: 9점 시선 정확도 테스트 실행(캘리브레이션된 모드에서만 동작)
+1. 캘리브레이션 화면에서 16점을 순서대로 응시 (자동 진행)
+2. 캘리브레이션 완료 후 나오는 가상 키보드로 화면 상단에 표시된 목표 문장을 끝까지 입력 (dwell 또는 입벌림 클릭으로 키 선택, 백스페이스 포함해도 무방 — 오히려 오타율 지표 수집에 도움이 됨)
+3. `t`: 9점 시선 정확도 테스트 실행 (`calibrated` 모드에서만 동작)
 4. `y`: (선택) 10회 원형 타겟팅 테스트 실행/재시작. `ESC`로 중도 종료 가능
-5. `q`: 앱 종료 — 이 시점에 sessions.csv 등 세션 메타데이터가 항상 저장된다(9점 테스트를 아예 안 했어도, 문장을 끝까지 안 쳤어도 저장됨)
+5. `q`: 앱 종료 — 이 시점에 `sessions.csv` 등 세션 메타데이터가 항상 저장됩니다 (9점 테스트를 아예 안 했어도, 문장을 끝까지 안 쳤어도 저장됨)
 
 ### 3. 결과 제출
 
-`gaze_accuracy_results/`와 `calibration_results/`(baseline.json 계열) 폴더 전체를 CSV/JSON 그대로 제출한다. 개별 파일을 골라내지 말고 폴더째 보내는 편이 안전하다.(append 누적 파일이라 실행 여러 번 섞여 있어도 run_id로 나중에 구분 가능)
+`gaze_accuracy_results/`와 `calibration_results/` 폴더 전체를 CSV/JSON 그대로 제출합니다. 개별 파일을 골라내지 말고 폴더째 보내는 편이 안전합니다 (append 누적 파일이라 실행을 여러 번 섞어도 `run_id`로 나중에 구분 가능).
