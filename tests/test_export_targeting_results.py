@@ -1,9 +1,15 @@
-"""main.export_targeting_results()의 fieldnames/row 스키마 일치를 검증한다.
+"""main.export_targeting_results()의 fieldnames/row 스키마 일치, 출력 디렉토리
+자동 생성을 검증한다.
 
 a773ba2(2026-08-16, "입벌림 방식 개선") 이후 fieldnames가 입벌림 캘리브레이션
 스키마로 잘못 교체되면서, csv.DictWriter(extrasaction 기본값 'raise')가
 row 작성 시 ValueError를 던져 앱 전체가 죽는 회귀가 있었다. 이 테스트는
 fieldnames와 실제 row 키가 어긋나면 즉시 실패하도록 회귀를 막는다.
+
+모든 테스트는 tmp_path로 chdir만 하고 gaze_accuracy_results/ 디렉토리를
+미리 만들어두지 않는다 — export_targeting_results()가 append_rows() 호출
+전에 스스로 os.makedirs(exist_ok=True)를 하는지를 매 테스트가 자연스럽게
+함께 검증한다(run_gaze_accuracy_test()가 이미 쓰는 것과 동일한 방식).
 
 카메라 없이 돌아가야 하므로 TargetingTestRunner 전체를 구동하지 않고,
 export_targeting_results()가 실제로 읽는 유일한 속성인 `.attempts`만 채운
@@ -48,11 +54,30 @@ def _read_csv_rows(csv_path):
         return reader.fieldnames, list(reader)
 
 
+def test_export_targeting_results_creates_missing_directory(tmp_path, monkeypatch):
+    """gaze_accuracy_results/가 아예 없는 상태에서도 함수가 스스로 만들어야 한다."""
+    monkeypatch.chdir(tmp_path)
+
+    out_dir = tmp_path / "gaze_accuracy_results"
+    assert not out_dir.exists()
+
+    runner = SimpleNamespace(attempts=[_make_attempt(1)])
+
+    main.export_targeting_results(
+        run_id="run-test-0",
+        keyboard_layout="qwerty",
+        targeting_runner=runner,
+        aborted=False,
+    )
+
+    assert out_dir.is_dir()
+    assert (out_dir / "targeting_results_v1.0.csv").is_file()
+
+
 def test_export_targeting_results_writes_without_crashing(tmp_path, monkeypatch):
     """fieldnames와 row 키가 어긋나면 append_rows가 ValueError를 던진다 —
     예외 없이 끝까지 실행되는 것 자체가 회귀 검증이다."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "gaze_accuracy_results").mkdir()
 
     runner = SimpleNamespace(
         attempts=[
@@ -75,7 +100,6 @@ def test_export_targeting_results_writes_without_crashing(tmp_path, monkeypatch)
 
 def test_export_targeting_results_fieldnames_match_row_keys(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "gaze_accuracy_results").mkdir()
 
     runner = SimpleNamespace(attempts=[_make_attempt(1)])
 
@@ -114,7 +138,6 @@ def test_export_targeting_results_fieldnames_match_row_keys(tmp_path, monkeypatc
 
 def test_export_targeting_results_records_aborted_flag(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "gaze_accuracy_results").mkdir()
 
     runner = SimpleNamespace(attempts=[_make_attempt(1)])
 
@@ -136,7 +159,6 @@ def test_export_targeting_results_records_aborted_flag(tmp_path, monkeypatch):
 def test_export_targeting_results_skips_empty_attempts(tmp_path, monkeypatch):
     """attempts가 비어 있으면(예: 타겟팅 진입 직후 ESC) 아무 파일도 만들지 않는다."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "gaze_accuracy_results").mkdir()
 
     runner = SimpleNamespace(attempts=[])
 
@@ -147,5 +169,6 @@ def test_export_targeting_results_skips_empty_attempts(tmp_path, monkeypatch):
         aborted=True,
     )
 
-    csv_path = tmp_path / "gaze_accuracy_results" / "targeting_results_v1.0.csv"
-    assert not csv_path.exists()
+    out_dir = tmp_path / "gaze_accuracy_results"
+    assert not out_dir.exists()
+    assert not (out_dir / "targeting_results_v1.0.csv").exists()

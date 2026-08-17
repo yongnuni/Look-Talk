@@ -582,6 +582,8 @@ def export_targeting_results(run_id, keyboard_layout, targeting_runner, aborted)
             "aborted": aborted,
         })
 
+    os.makedirs("gaze_accuracy_results", exist_ok=True)
+
     append_rows(
         os.path.join("gaze_accuracy_results", "targeting_results_v1.0.csv"),
         fieldnames,
