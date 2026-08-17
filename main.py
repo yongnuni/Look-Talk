@@ -6,9 +6,8 @@ import math
 import time
 import os
 from datetime import datetime
-from PIL import Image, ImageDraw
 from src.calibrations.baseline_manager import save_baseline, load_baseline
-from src.tracking.blink import BlinkDetector, BlinkKind
+from src.tracking.blink import BlinkDetector
 import src.viz.viz as viz
 import matplotlib.pyplot as plt
 from src.cheonjiin import cheonjiin_composer
@@ -90,11 +89,11 @@ from src.ui import (
     draw_mouth_calibration_screen,
     draw_targeting_test_screen,
     draw_targeting_result_screen,
-    font
 )
 
 from tests.test_runner import TestRunner
 from tests.targeting_test_runner import TargetingTestRunner
+from src.metrics.collector import MetricsCollector
 
 def auto_brightness(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -130,8 +129,6 @@ def auto_brightness(frame):
         lab,
         cv2.COLOR_LAB2BGR
     )
-
-from src.metrics.collector import MetricsCollector
 
 MAX_SQPNP_DELTA_PX = 120
 
@@ -622,17 +619,6 @@ def export_targeting_results(run_id, keyboard_layout, targeting_runner, aborted)
 
 
 def append_mouth_baseline_history(run_id, saved_path):
-    """baseline.json 저장 시마다 calibration_results/mouth_baseline_history_v1.0.csv에
-    1행을 append한다.
-
-    baseline_manager.py(src/calibrations/)는 팀원 영역이라 건드리지 않는다 —
-    baseline.json의 덮어쓰기 동작 자체는 그대로 두고, 방금 그 파일이 쓰인
-    직후 이미 있는 load_baseline()으로 다시 읽어(=수정 없이 읽기 전용 재사용)
-    이력만 별도로 쌓는다. saved_at은 baseline_manager.py가 실제로 쓴 값을
-    그대로 가져온다(main.py에서 새로 datetime.now()를 부르면 미세하게
-    다른 값이 될 수 있어, "기존 값 유지" 요구를 정확히 지키기 위해
-    저장된 파일을 다시 읽는 방식을 택했다).
-    """
     baseline = load_baseline(saved_path)
 
     if baseline is None:

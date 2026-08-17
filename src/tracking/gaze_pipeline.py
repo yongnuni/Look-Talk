@@ -77,37 +77,6 @@ class GazePipeline:
         self.gaze_buffer.clear()
         self.initialized = False
 
-    def _is_head_pose_valid(self, head_pose):
-        """
-        head_pose 기반으로 현재 얼굴 자세가 시선 입력에 적절한지 판단합니다.
-
-        아직은 좌표 보정이 아니라,
-        너무 비정면이면 gaze 입력을 무효 처리하는 용도입니다.
-        """
-
-        if head_pose is None:
-            return True
-
-        if not head_pose.get("valid", False):
-            return False
-
-        yaw = abs(head_pose.get("yaw", 0.0))
-        pitch = abs(head_pose.get("pitch", 0.0))
-        roll = abs(head_pose.get("roll", 0.0))
-
-        # 임시 기준값입니다.
-        # 실제 테스트하면서 20~35도 사이로 조정하면 됩니다.
-        if yaw > 25:
-            return False
-
-        if pitch > 25:
-            return False
-
-        if roll > 25:
-            return False
-
-        return True
-
     def update(self, sx, sy, conf, blink, head_pose=None):
         """
         캘리브레이션된 화면 좌표(sx, sy)를 받아
@@ -130,9 +99,6 @@ class GazePipeline:
             self._reset_tracking_state()
             return -1, -1, 0
 
-        #if not self._is_head_pose_valid(head_pose):
-        #    self._reset_tracking_state()
-        #    return -1, -1, 0
         # 최근 화면 좌표를 버퍼에 저장
         self.gaze_buffer.append(
             (

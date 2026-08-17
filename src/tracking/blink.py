@@ -107,8 +107,6 @@ class BlinkDetector:
         self._last_event_time = -1e9
         self._long_fired = False
 
-        self.last_ear = 0.0  # 디버그/HUD 표시용
-
     # 외부에서 "지금 감겨 있나"를 물을 때 (시선 업데이트 게이팅용)
     @property
     def is_closed(self) -> bool:
@@ -119,7 +117,6 @@ class BlinkDetector:
             now = time.monotonic()
 
         ear = average_ear(landmarks)
-        self.last_ear = ear
 
         if self._state == _State.OPEN:
             # 불응기 안에서는 새 닫힘을 시작하지 않음 (떨림 방지)
@@ -166,15 +163,3 @@ class BlinkDetector:
 
         # natural_max ~ intent_min 사이 데드존 → 의도 모호, 버림
         return None
-
-    # 사용자별 EAR 보정
-    def calibrate_from_open_samples(self, ear_samples):
-        """
-        눈을 뜨고 있는 동안 수집한 EAR 리스트로 임계값을 개인화.
-        캘리브레이션 단계에서 average_ear()를 30~60프레임 모아 전달.
-        """
-        if not ear_samples:
-            return
-        baseline = sorted(ear_samples)[len(ear_samples) // 2]  # 중앙값
-        self.close_threshold = baseline * 0.55
-        self.open_threshold = baseline * 0.70

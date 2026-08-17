@@ -7,8 +7,6 @@ from src.cheonjiin import cheonjiin_composer
 from src.hangul import (
     add_jamo,
     flush_buffer,
-    finalText,
-    jamo_buffer,
     double_consonants
 )
 

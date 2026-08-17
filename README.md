@@ -65,10 +65,8 @@ Look-Talk/
     │
     ├── calibrations/
     │   ├── baseline_manager.py      # 입벌림 캘리브레이션 결과를 JSON으로 저장/로드
-    │   ├── mouth_calibration.py     # 입벌림 캘리브레이션 상태머신 (rest_collect→trial_ready→trial_wait→trial_active→done)
-    │   │                            # MAR 기준값·활성화 임계값 산출, 성공률/일관성/false trigger율 등 지표 계산
-    │   ├── blink_calibration.py     # 빈 파일 (미구현 스텁)
-    │   └── gaze_calibration.py      # 빈 파일 (미구현 스텁)
+    │   └── mouth_calibration.py     # 입벌림 캘리브레이션 상태머신 (rest_collect→trial_ready→trial_wait→trial_active→done)
+    │                                # MAR 기준값·활성화 임계값 산출, 성공률/일관성/false trigger율 등 지표 계산
     │
     ├── tracking/
     │   ├── calibration.py           # 16점 홍채→화면 매핑 학습(Homography),
