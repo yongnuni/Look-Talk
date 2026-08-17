@@ -541,30 +541,18 @@ def export_targeting_results(run_id, keyboard_layout, targeting_runner, aborted)
 
     fieldnames = [
         "run_id",
+        "keyboard_layout",
         "ts_ms",
-        "saved_at",
-
-        "mar_baseline",
-        "open_mar",
-        "open_threshold",
-        "close_threshold",
-
-        "mouth_success_rate",
-        "activation_amplitude_mean",
-        "activation_duration_mean",
-        "open_close_speed_mean",
-
-        "mouth_consistency",
-        "mouth_contrast_ratio",
-        "mouth_false_trigger_rate",
-        "amplitude_decay",
-
-        "mouth_min_hold_duration",
-        "mouth_init_score",
-
-        "total_trials",
-        "success_count",
-        "false_trigger_count",
+        "target_index",
+        "success",
+        "reaction_time_sec",
+        "input_mode",
+        "timeout",
+        "target_x",
+        "target_y",
+        "cursor_x",
+        "cursor_y",
+        "aborted",
     ]
 
     ts_ms = clock.now_ms()
