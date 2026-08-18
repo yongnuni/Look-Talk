@@ -70,7 +70,7 @@ FUNCTION_ROW_RIGHT = ["Del"]
 # dwell/mouth/process_key는 이 매핑을 몰라도 된다.
 DISPLAY_LABELS = {
     "Shift": "shift",
-    "Del": "뒤돌리기",
+    "Del": "되돌리기",
     " ": "스페이스",
 }
 
