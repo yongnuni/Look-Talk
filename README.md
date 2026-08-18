@@ -45,7 +45,7 @@ pip install scikit-learn
 ## 실행 방법
 
 ```powershell
-python main.py [--gaze-mode calibrated|no_calibration] [--strategy 이름] [--keyboard-layout qwerty|cheonjiin] [--user-id 이름]
+python main.py [--gaze-mode calibrated|no_calibration] [--strategy 이름] [--keyboard-layout qwerty|cheonjiin] [--user-id 이름] [--condition-label 라벨]
 ```
 
 | 옵션 | 기본값 | 선택지 | 설명 |
@@ -54,6 +54,7 @@ python main.py [--gaze-mode calibrated|no_calibration] [--strategy 이름] [--ke
 | `--strategy` | `head_pose_relative_iris` | 등록된 strategy 이름(현재 `head_pose_relative_iris` 1개뿐) | `--gaze-mode no_calibration`일 때만 사용하는 좌표 추정 전략. |
 | `--keyboard-layout` | `qwerty` | `qwerty`, `cheonjiin` | 키보드 배열. |
 | `--user-id` | `yejin` | 자유 문자열 | 결과 CSV(`sessions.csv` 등)에 기록될 참가자 식별자. 지정하지 않으면 모든 로그가 `yejin`으로 기록된다. |
+| `--condition-label` | (빈 문자열) | 자유 문자열 | `sessions.csv`에 기록될 실험 조건 라벨(예: `baseline`, `new-smoothing`). 코드를 바꿔가며 실험할 때 `git_commit`(자동 기록)만으로 부족하면 직접 지정한다. |
 
 ## 키보드 단축키
 
@@ -183,8 +184,8 @@ tests/
 
 | 파일 | 위치 | 내용 | 생성 시점 |
 |---|---|---|---|
-| `sessions_v1.8.csv` | `gaze_accuracy_results/` | 실행(run) 1회당 메타데이터 1행 | 앱 종료 시 항상 (9점 테스트를 안 했어도 저장) |
-| `gaze_accuracy_v1.8.csv` | `gaze_accuracy_results/` | 9점 테스트 타깃별 오차·STB 지표 | `t` 키로 9점 테스트 실행 시 |
+| `sessions_v1.9.csv` | `gaze_accuracy_results/` | 실행(run) 1회당 메타데이터 1행 | 앱 종료 시 항상 (9점 테스트를 안 했어도 저장) |
+| `gaze_accuracy_v1.9.csv` | `gaze_accuracy_results/` | 9점 테스트 타깃별 오차·STB 지표 | `t` 키로 9점 테스트 실행 시 |
 | `gaze_accuracy_{mode}_%Y%m%d_%H%M%S.csv` | `gaze_accuracy_results/` | 9점 테스트 원시 결과(매핑 모드별) | `t` 키로 9점 테스트 실행 시 |
 | `mapper_session_log_v1.1.csv` | `gaze_accuracy_results/` | 매 프레임 로그 | 상시 (60프레임마다 flush) |
 | `input_events_v1.0.csv` | `gaze_accuracy_results/` | 키 탭 단위 원시 이벤트 | 상시 (30탭마다 flush) |
