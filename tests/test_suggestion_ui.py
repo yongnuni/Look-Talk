@@ -5,7 +5,9 @@ import pytest
 
 from src.keyboard import calculate_keyboard_layout
 from src.ui import (
+    HOVER_BG,
     IDLE_BG,
+    PROGRESS_BAR_COLOR,
     _fit_suggestion_text,
     draw_suggestion_boxes,
 )
@@ -74,3 +76,36 @@ def test_text_layout_scales_with_resolution():
     large = _fit_suggestion_text(text, 582, 118)
 
     assert large[1].size >= small[1].size
+
+
+def test_nonempty_suggestion_shows_hover_and_dwell_progress_but_empty_does_not():
+    layout = calculate_keyboard_layout(1280, 720)
+    first, second, _ = layout["suggestion_rects"]
+    canvas = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    hovered = draw_suggestion_boxes(
+        canvas,
+        ("감사합니다", "", ""),
+        layout["suggestion_rects"],
+        hovered_index=0,
+        dwell_index=0,
+        dwell_ratio=0.5,
+    )
+    empty_hover = draw_suggestion_boxes(
+        canvas,
+        ("감사합니다", "", ""),
+        layout["suggestion_rects"],
+        hovered_index=1,
+    )
+
+    sample_first = (first.y + first.height // 4, first.x + first.width // 4)
+    sample_second = (
+        second.y + second.height // 4,
+        second.x + second.width // 4,
+    )
+
+    assert tuple(hovered[sample_first]) != IDLE_BG
+    assert tuple(hovered[first.bottom - 3, first.x + 5]) == PROGRESS_BAR_COLOR
+    assert tuple(empty_hover[sample_second]) == IDLE_BG
+    assert tuple(empty_hover[sample_first]) == IDLE_BG
+    assert HOVER_BG != IDLE_BG

@@ -88,6 +88,28 @@ class SuggestionStateController:
             return self.favorite_sentences
         return self.autocomplete_suggestions
 
+    def clear_after_selection(self, current_text: str) -> None:
+        """선택 결과를 기준 문자열로 고정하고 추천 슬롯을 즉시 비웁니다.
+
+        다음 ``update()``에 같은 문자열이 들어오면 재조회하지 않습니다.
+        이후 일반 키나 되돌리기로 문자열이 달라질 때만 새 현재 단어를
+        기준으로 추천을 다시 계산합니다.
+        """
+
+        if not isinstance(current_text, str):
+            current_text = ""
+
+        self.last_current_text = current_text
+        self.mode = AUTOCOMPLETE_MODE if current_text else FAVORITES_MODE
+        self.current_chosung = (
+            extract_chosung(_current_word(current_text))
+            if current_text
+            else ""
+        )
+        self.autocomplete_suggestions = ()
+        self.last_lookup_ms = 0.0
+        self.slots = _fill_slots(())
+
     def update(self, current_text: str) -> SuggestionUpdate | None:
         """입력이 바뀌고 표시 후보 또는 모드가 달라지면 스냅샷을 반환한다."""
 

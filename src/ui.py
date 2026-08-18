@@ -515,8 +515,17 @@ def _fit_suggestion_text(text, rect_width, rect_height):
     return fitted_text, text_font, bbox, text_width, text_height, 0
 
 
-def draw_suggestion_boxes(img, suggestions, suggestion_rects=None):
-    """항상 세 추천 박스를 그리고 존재하는 후보 텍스트만 중앙에 표시한다."""
+def draw_suggestion_boxes(
+    img,
+    suggestions,
+    suggestion_rects=None,
+    hovered_index=None,
+    dwell_index=None,
+    dwell_ratio=0.0,
+    show_cursor=True,
+    locked_index=None,
+):
+    """세 추천 박스와 내용이 있는 후보의 hover/선택 진행을 표시한다."""
 
     rects = (
         LAYOUT["suggestion_rects"]
@@ -527,18 +536,72 @@ def draw_suggestion_boxes(img, suggestions, suggestion_rects=None):
     draw = ImageDraw.Draw(img_pil)
 
     for index, rect in enumerate(rects):
+        text = suggestions[index] if index < len(suggestions) else ""
+        on_suggestion = bool(text) and hovered_index == index
+        text_color = KEY_TEXT_COLOR
+
+        if text and locked_index == index:
+            bg_color = DWELL_BG_END
+            border_color = DWELL_BORDER_END
+            text_color = KEY_TEXT_COLOR_DWELL
+        elif (
+            on_suggestion
+            and dwell_index == index
+            and show_cursor
+        ):
+            ratio = max(0.0, min(1.0, dwell_ratio))
+            bg_color = tuple(
+                int(HOVER_BG[i] + (DWELL_BG_END[i] - HOVER_BG[i]) * ratio)
+                for i in range(3)
+            )
+            border_color = tuple(
+                int(
+                    HOVER_BORDER[i]
+                    + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * ratio
+                )
+                for i in range(3)
+            )
+            if ratio > 0.5:
+                text_color = KEY_TEXT_COLOR_DWELL
+        elif on_suggestion and show_cursor:
+            bg_color = HOVER_BG
+            border_color = HOVER_BORDER
+        elif on_suggestion and not show_cursor:
+            bg_color = (255, 235, 0)
+            border_color = (255, 120, 0)
+        else:
+            bg_color = IDLE_BG
+            border_color = IDLE_BORDER
+
         radius = int(min(rect.width, rect.height) * 0.18)
         draw.rounded_rectangle(
             rect.pillow_bbox(),
             radius=radius,
-            fill=IDLE_BG,
-            outline=IDLE_BORDER,
+            fill=bg_color,
+            outline=border_color,
             width=2,
         )
 
-        text = suggestions[index] if index < len(suggestions) else ""
         if not text:
             continue
+
+        if (
+            on_suggestion
+            and dwell_index == index
+            and dwell_ratio > 0
+        ):
+            bar_width = int(rect.width * min(1.0, dwell_ratio))
+            bar_right = rect.x + max(1, min(rect.width, bar_width)) - 1
+            draw.rounded_rectangle(
+                [
+                    rect.x,
+                    rect.bottom - 6,
+                    bar_right,
+                    rect.bottom - 1,
+                ],
+                radius=3,
+                fill=PROGRESS_BAR_COLOR,
+            )
 
         (
             display_text,
@@ -554,7 +617,7 @@ def draw_suggestion_boxes(img, suggestions, suggestion_rects=None):
             (text_x, text_y),
             display_text,
             font=text_font,
-            fill=KEY_TEXT_COLOR,
+            fill=text_color,
             spacing=spacing,
             align="center",
         )
