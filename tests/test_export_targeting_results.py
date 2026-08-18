@@ -1,4 +1,4 @@
-"""main.export_targeting_results()의 fieldnames/row 스키마 일치, 출력 디렉토리
+"""export_targeting_results()의 fieldnames/row 스키마 일치, 출력 디렉토리
 자동 생성을 검증한다.
 
 a773ba2(2026-08-16, "입벌림 방식 개선") 이후 fieldnames가 입벌림 캘리브레이션
@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import main
+from src.testing.targeting_export import export_targeting_results
 from src.common import clock
 from tests.targeting_test_runner import TargetAttempt
 
@@ -63,7 +63,7 @@ def test_export_targeting_results_creates_missing_directory(tmp_path, monkeypatc
 
     runner = SimpleNamespace(attempts=[_make_attempt(1)])
 
-    main.export_targeting_results(
+    export_targeting_results(
         run_id="run-test-0",
         keyboard_layout="qwerty",
         targeting_runner=runner,
@@ -87,7 +87,7 @@ def test_export_targeting_results_writes_without_crashing(tmp_path, monkeypatch)
         ]
     )
 
-    main.export_targeting_results(
+    export_targeting_results(
         run_id="run-test-1",
         keyboard_layout="qwerty",
         targeting_runner=runner,
@@ -103,7 +103,7 @@ def test_export_targeting_results_fieldnames_match_row_keys(tmp_path, monkeypatc
 
     runner = SimpleNamespace(attempts=[_make_attempt(1)])
 
-    main.export_targeting_results(
+    export_targeting_results(
         run_id="run-test-2",
         keyboard_layout="cheonjiin",
         targeting_runner=runner,
@@ -141,7 +141,7 @@ def test_export_targeting_results_records_aborted_flag(tmp_path, monkeypatch):
 
     runner = SimpleNamespace(attempts=[_make_attempt(1)])
 
-    main.export_targeting_results(
+    export_targeting_results(
         run_id="run-test-3",
         keyboard_layout="qwerty",
         targeting_runner=runner,
@@ -162,7 +162,7 @@ def test_export_targeting_results_skips_empty_attempts(tmp_path, monkeypatch):
 
     runner = SimpleNamespace(attempts=[])
 
-    main.export_targeting_results(
+    export_targeting_results(
         run_id="run-test-4",
         keyboard_layout="qwerty",
         targeting_runner=runner,
