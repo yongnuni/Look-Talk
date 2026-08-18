@@ -75,6 +75,7 @@ from src.ui import (
     draw_status_bar,
     draw_test_complete_overlay,
     draw_text_area,
+    draw_suggestion_boxes,
     draw_mouth_calibration_screen,
     draw_targeting_test_screen,
     draw_targeting_result_screen,
@@ -87,6 +88,11 @@ from src.vision.preprocessing import auto_brightness
 from src.app.cli import parse_args
 from src.metrics.baseline_history import append_mouth_baseline_history
 from src.metrics.tap_logging import log_input_tap
+from src.recommendation import (
+    SuggestionStateController,
+    format_suggestion_update,
+    initialize_recommender,
+)
 from src.testing.targeting_export import export_targeting_results
 from src.testing.gaze_accuracy import run_gaze_accuracy_test, show_session_popup
 
@@ -96,6 +102,16 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
     clock.init()
     run_id = ids.new_run_id()
+
+    suggestion_engine = initialize_recommender()
+    suggestion_state = SuggestionStateController()
+    if suggestion_engine.available:
+        print(
+            "[suggestions] initialized "
+            f"wordfreq={suggestion_engine.wordfreq_count} "
+            f"hospital={suggestion_engine.hospital_count} "
+            f"elapsed_ms={suggestion_engine.initialization_ms:.2f}"
+        )
 
     # 실험 조건 스냅샷: 9점 테스트('t') 여부와 무관하게 sessions 행에는
     # 항상 필요하므로 앱 실행 시작 시점에 1회 고정한다. config.py는 프로세스
@@ -847,9 +863,17 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 + pending_cheonjiin_text
             )
 
+            suggestion_update = suggestion_state.update(current_text)
+            if suggestion_update is not None:
+                print(format_suggestion_update(suggestion_update))
+
             target = tester.target_text if tester.active else None
 
             kbd_bg = draw_text_area(kbd_bg, current_text, target)
+            kbd_bg = draw_suggestion_boxes(
+                kbd_bg,
+                suggestion_state.slots,
+            )
 
             # 테스트 완료 감지
             if tester.check_complete(current_text):

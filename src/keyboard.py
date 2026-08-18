@@ -155,6 +155,34 @@ def hit_test_buttons(button_list, point_x, point_y):
     return None
 
 
+def calculate_suggestion_rects(suggestion_rect, key_gap_x):
+    """예약된 추천 영역을 동일 계열 너비의 독립 슬롯 3개로 나눈다."""
+
+    x, y, width, height = suggestion_rect
+    usable_width = width - 2 * key_gap_x
+    base_width, remainder = divmod(usable_width, 3)
+    rects = []
+    current_x = x
+
+    for index in range(3):
+        rect_width = base_width + (1 if index < remainder else 0)
+        rects.append(KeyRect(current_x, y, rect_width, height))
+        current_x += rect_width
+        if index < 2:
+            current_x += key_gap_x
+
+    return tuple(rects)
+
+
+def hit_test_suggestions(suggestion_rects, point_x, point_y):
+    """독립 추천 hitbox 중 점을 포함하는 슬롯 인덱스를 반환한다."""
+
+    for index, rect in enumerate(suggestion_rects):
+        if rect.contains(point_x, point_y):
+            return index
+    return None
+
+
 def _clamp(value, lo, hi):
     return max(lo, min(value, hi))
 
@@ -276,6 +304,13 @@ def calculate_keyboard_layout(screen_w, screen_h):
     input_x = outer_margin_x
     input_w = confirm_x - confirm_gap - input_x
 
+    suggestion_rect = (
+        outer_margin_x,
+        suggestion_y,
+        screen_w - 2 * outer_margin_x,
+        suggestion_h,
+    )
+
     return {
         "screen_w": screen_w,
         "screen_h": screen_h,
@@ -294,11 +329,10 @@ def calculate_keyboard_layout(screen_w, screen_h):
 
         "input_rect": (input_x, input_y, input_w, input_h),
         "confirm_rect": (confirm_x, input_y, confirm_w, input_h),
-        "suggestion_rect": (
-            outer_margin_x,
-            suggestion_y,
-            screen_w - 2 * outer_margin_x,
-            suggestion_h
+        "suggestion_rect": suggestion_rect,
+        "suggestion_rects": calculate_suggestion_rects(
+            suggestion_rect,
+            key_gap_x,
         ),
 
         "keyboard_top": keyboard_top,

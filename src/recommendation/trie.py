@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.recommendation.chosung import CHOSUNG
-from src.recommendation.models import ChosungWord
+from src.recommendation.models import HOSPITAL_SOURCE, ChosungWord
 
 
 DICTIONARY_SCHEMA_VERSION = 1
@@ -174,8 +174,27 @@ def load_chosung_words(
     return _validate_payload(payload, dictionary_path)
 
 
-def _candidate_order(candidate: ChosungWord) -> tuple[int, float, str]:
-    return (candidate.rank, -float(candidate.freq), candidate.word)
+def _candidate_order(candidate: ChosungWord) -> tuple[int, int, str]:
+    """노드 캐시의 결정적 우선순위 키를 반환한다."""
+
+    return (-candidate.priority, candidate.rank, candidate.word)
+
+
+def _prefer_duplicate(
+    existing: ChosungWord,
+    candidate: ChosungWord,
+) -> ChosungWord:
+    """같은 표시 문자열이면 병원 항목을 우선하고 나머지는 정렬키를 따른다."""
+
+    if existing.source != candidate.source:
+        if candidate.source == HOSPITAL_SOURCE:
+            return candidate
+        if existing.source == HOSPITAL_SOURCE:
+            return existing
+
+    if _candidate_order(candidate) < _candidate_order(existing):
+        return candidate
+    return existing
 
 
 class ChosungTrie:
@@ -222,9 +241,10 @@ class ChosungTrie:
 
         if existing_index is not None:
             existing = node.cached_candidates[existing_index]
-            if _candidate_order(existing) <= _candidate_order(candidate):
+            preferred = _prefer_duplicate(existing, candidate)
+            if preferred is existing:
                 return
-            node.cached_candidates[existing_index] = candidate
+            node.cached_candidates[existing_index] = preferred
         else:
             node.cached_candidates.append(candidate)
 

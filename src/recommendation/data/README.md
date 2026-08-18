@@ -42,3 +42,16 @@ python -m scripts.build_chosung_dictionary
 
 The generated JSON includes its source version, filtering rules, sorting rule,
 license, and attribution. It contains no generation timestamp.
+
+## Look-Talk hospital expressions
+
+`hospital_phrases.csv` is a separate, manually curated Look-Talk dataset. It is
+not used as the empty-input favorites list and is not derived from `wordfreq`.
+It augments NLP autocomplete results only. The UTF-8 CSV columns are `text`,
+`priority`, `category`, and `context`; Chosung sequences are computed at load
+time instead of being stored in the file.
+
+The loader NFC-normalizes each expression and accepts precomposed Hangul with
+single spaces. It rejects leading, trailing, or repeated spaces, empty text,
+Latin letters, numbers, punctuation, invalid contexts, and duplicate normalized
+expressions. CSV order is the deterministic tie-breaker within a priority.
