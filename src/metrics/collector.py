@@ -22,7 +22,7 @@ from src.common import ids
 
 class MetricsCollector:
 
-    SCHEMA_VERSION = "1.8"
+    SCHEMA_VERSION = "1.9"
 
     def __init__(
             self,
@@ -52,6 +52,8 @@ class MetricsCollector:
             # backbone_enabled: 백본 제거됨(2026-08). 호출부(main.py)가 항상 False를
             # 넘긴다 — 기존 sessions CSV와의 스키마 호환을 위해 컬럼만 유지한다.
             backbone_enabled=None,
+            git_commit=None,
+            condition_label=None,
     ):
     # 세션 단위 메타데이터 (sessions.csv 한 행)
         # test_id: "9점 테스트 1회" 식별자. 기존 이름은 session_id였다
@@ -87,6 +89,11 @@ class MetricsCollector:
         self.monitor_diagonal_inch = monitor_diagonal_inch
         self.ridge_enabled = ridge_enabled
         self.backbone_enabled = backbone_enabled
+        # git_commit: 코드 버전. config_hash는 파라미터만 포착하므로, 코드를
+        # 바꾸고 파라미터가 그대로면 config_hash만으로는 두 조건이 구분되지
+        # 않는다 — 기능 실험(코드 변경) 조건을 구분하려고 별도로 기록한다.
+        self.git_commit = git_commit
+        self.condition_label = condition_label
 
         self.input_duration_sec = None
         self.cursor_travel_distance_px = None
@@ -337,6 +344,8 @@ class MetricsCollector:
                 "monitor_diagonal_inch",
                 "ridge_enabled",
                 "backbone_enabled",
+                "git_commit",
+                "condition_label",
                 "export_reason",
                 "schema_version",
             ]
@@ -410,6 +419,8 @@ class MetricsCollector:
                 "monitor_diagonal_inch": self.monitor_diagonal_inch,
                 "ridge_enabled": self.ridge_enabled,
                 "backbone_enabled": self.backbone_enabled,
+                "git_commit": self.git_commit,
+                "condition_label": self.condition_label,
                 "export_reason": export_reason,
                 "schema_version": self.SCHEMA_VERSION,
             }

@@ -13,6 +13,7 @@ import src.hangul as hangul
 
 from src.common import clock, ids
 from src.common.config_snapshot import build_snapshot, snapshot_hash
+from src.common.git_info import get_git_commit
 
 from src.config import (
     SCREEN_W,
@@ -104,7 +105,7 @@ from src.testing.targeting_export import export_targeting_results
 from src.testing.gaze_accuracy import run_gaze_accuracy_test, show_session_popup
 
 
-def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY,user_id="yejin"):
+def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY,user_id="yejin",condition_label=""):
     # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
     clock.init()
@@ -128,6 +129,13 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
     config_json = json.dumps(
         config_snapshot_dict, sort_keys=True, ensure_ascii=False
     )
+
+    # git_commit: config_hash는 파라미터만 포착하므로 코드를 바꾸고 파라미터가
+    # 그대로면 두 조건이 같은 해시로 뭉친다 — 코드 버전(기능 실험 조건)은
+    # 별도로 여기서 1회 취득해 재사용한다(호출마다 subprocess를 새로 띄우지
+    # 않기 위함). config_snapshot에는 넣지 않는다 — 코드 버전은 파라미터가
+    # 아니므로 넣으면 커밋할 때마다 해시가 갈려 파라미터 실험 그룹핑이 깨진다.
+    git_commit = get_git_commit()
 
     cap = cv2.VideoCapture(0)
 
@@ -1413,6 +1421,8 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
                         # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
                         backbone_enabled=False,
+                        git_commit=git_commit,
+                        condition_label=condition_label,
 
                         # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
                         calib_id=(
@@ -1496,6 +1506,8 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
                 # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
                 backbone_enabled=False,
+                git_commit=git_commit,
+                condition_label=condition_label,
             )
             # 9점 테스트가 없었던 실행이므로 __init__이 발급한 test_id는
             # 실제로 일어나지 않은 테스트를 가리키게 된다 — 결측으로 남긴다.
@@ -1546,12 +1558,14 @@ if __name__ == "__main__":
         _mode,
         _strategy_name,
         _keyboard_layout,
-        _user_id
+        _user_id,
+        _condition_label
     ) = parse_args()
 
     main(
         mode=_mode,
         strategy_name=_strategy_name,
         keyboard_layout=_keyboard_layout,
-        user_id=_user_id
+        user_id=_user_id,
+        condition_label=_condition_label
     )

@@ -61,6 +61,18 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--condition-label",
+        dest="condition_label",
+        default="",
+        help=(
+            "sessions.csv에 기록될 실험 조건 라벨(자유 문자열, 기본값 빈 "
+            "문자열). config_hash는 파라미터만 포착하므로, 코드를 바꾸고 "
+            "파라미터가 그대로면 두 조건이 같은 해시로 묶인다 — 'baseline' / "
+            "'new-smoothing'처럼 실험자가 직접 구분하려면 지정한다."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -76,5 +88,6 @@ def parse_args():
         args.gaze_mode,
         args.strategy,
         args.keyboard_layout,
-        args.user_id
+        args.user_id,
+        args.condition_label
     )

@@ -13,6 +13,8 @@ os.makedirs("", exist_ok=True)는 FileNotFoundError를 던지므로(윈도우/�
 경우(os.path.dirname이 빈 문자열)를 건너뛰는지도 함께 검증한다.
 """
 
+import csv
+
 import pytest
 
 from src.metrics.collector import MetricsCollector
@@ -78,3 +80,53 @@ def test_export_csv_skips_makedirs_for_bare_filename(tmp_path, monkeypatch):
     )
 
     assert (tmp_path / "bare_sessions_test.csv").is_file()
+
+
+def test_export_csv_writes_git_commit_and_condition_label(tmp_path):
+    """git_commit/condition_label(v1.9 신규 컬럼)이 sessions 행에 그대로
+    기록되는지 확인한다 — 둘 다 main.py가 계산해서 넘겨주는 값을 저장만
+    할 뿐이므로, 생성자로 받은 값이 CSV에 그대로 나오면 배선이 맞다."""
+    collector = MetricsCollector(
+        user_id="tester",
+        run_id="run-test",
+        git_commit="abc1234-dirty",
+        condition_label="new-smoothing",
+    )
+
+    sessions_path = tmp_path / "sessions_test.csv"
+    collector.export_csv(
+        sessions_path=str(sessions_path),
+        accuracy_path=str(tmp_path / "gaze_accuracy_test.csv"),
+        export_session=True,
+        export_accuracy=False,
+        export_reason=MetricsCollector.EXPORT_REASON_APP_EXIT,
+    )
+
+    with open(sessions_path, encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["git_commit"] == "abc1234-dirty"
+    assert rows[0]["condition_label"] == "new-smoothing"
+
+
+def test_export_csv_defaults_git_commit_and_condition_label_to_empty(tmp_path):
+    """생성자에 git_commit/condition_label을 넘기지 않으면(예: 이 파일의
+    기존 _make_collector 헬퍼) None이 저장되지, 예외 없이 조용히 빠지지
+    않는지 확인한다."""
+    collector = _make_collector()
+
+    sessions_path = tmp_path / "sessions_test.csv"
+    collector.export_csv(
+        sessions_path=str(sessions_path),
+        accuracy_path=str(tmp_path / "gaze_accuracy_test.csv"),
+        export_session=True,
+        export_accuracy=False,
+        export_reason=MetricsCollector.EXPORT_REASON_APP_EXIT,
+    )
+
+    with open(sessions_path, encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]["git_commit"] == ""
+    assert rows[0]["condition_label"] == ""
