@@ -30,10 +30,6 @@ class NoCalibrationMapper(GazeMapper):
         return True
 
     @property
-    def strategy(self):
-        return self._strategy
-
-    @property
     def active_method(self):
         return type(self._strategy).__name__
 

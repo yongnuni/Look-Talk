@@ -1,4 +1,5 @@
 import webbrowser
+from dataclasses import dataclass
 
 from src.config import SCREEN_W, SCREEN_H
 from src.cheonjiin import cheonjiin_composer
@@ -6,8 +7,6 @@ from src.cheonjiin import cheonjiin_composer
 from src.hangul import (
     add_jamo,
     flush_buffer,
-    finalText,
-    jamo_buffer,
     double_consonants
 )
 
@@ -71,9 +70,50 @@ FUNCTION_ROW_RIGHT = ["Del"]
 # dwell/mouth/process_key는 이 매핑을 몰라도 된다.
 DISPLAY_LABELS = {
     "Shift": "shift",
-    "Del": "뒤돌리기",
+    "Del": "되돌리기",
     " ": "스페이스",
 }
+
+
+@dataclass(frozen=True)
+class KeyRect:
+    """렌더링과 시선 hit-test가 함께 사용하는 키의 실제 사각형."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    @property
+    def right(self):
+        return self.x + self.width
+
+    @property
+    def bottom(self):
+        return self.y + self.height
+
+    @property
+    def center(self):
+        return (
+            self.x + self.width / 2,
+            self.y + self.height / 2,
+        )
+
+    def contains(self, point_x, point_y):
+        """서로 맞닿은 사각형도 중복 판정하지 않는 반열린 경계 검사."""
+        return (
+            self.x <= point_x < self.right
+            and self.y <= point_y < self.bottom
+        )
+
+    def pillow_bbox(self):
+        """Pillow의 양끝 포함 좌표계에서 정확히 width × height를 그린다."""
+        return [
+            self.x,
+            self.y,
+            self.right - 1,
+            self.bottom - 1,
+        ]
 
 
 class Button:
@@ -82,12 +122,65 @@ class Button:
         pos,
         text,
         size=None,
-        font_role="default"
+        font_role="default",
+        display_label=None
     ):
-        self.pos = pos
-        self.size = size or [85, 85]
+        width, height = size or [85, 85]
+        self.rect = KeyRect(
+            x=int(pos[0]),
+            y=int(pos[1]),
+            width=int(width),
+            height=int(height),
+        )
         self.text = text
         self.font_role = font_role
+        self.display_label = display_label
+
+    @property
+    def pos(self):
+        """기존 호출부 호환용. 좌표의 원본은 rect 하나뿐이다."""
+        return [self.rect.x, self.rect.y]
+
+    @property
+    def size(self):
+        """기존 호출부 호환용. 크기의 원본은 rect 하나뿐이다."""
+        return [self.rect.width, self.rect.height]
+
+
+def hit_test_buttons(button_list, point_x, point_y):
+    """실제로 렌더링되는 사각형 안에 있는 버튼 하나를 반환한다."""
+    for button in button_list:
+        if button.rect.contains(point_x, point_y):
+            return button
+    return None
+
+
+def calculate_suggestion_rects(suggestion_rect, key_gap_x):
+    """예약된 추천 영역을 동일 계열 너비의 독립 슬롯 3개로 나눈다."""
+
+    x, y, width, height = suggestion_rect
+    usable_width = width - 2 * key_gap_x
+    base_width, remainder = divmod(usable_width, 3)
+    rects = []
+    current_x = x
+
+    for index in range(3):
+        rect_width = base_width + (1 if index < remainder else 0)
+        rects.append(KeyRect(current_x, y, rect_width, height))
+        current_x += rect_width
+        if index < 2:
+            current_x += key_gap_x
+
+    return tuple(rects)
+
+
+def hit_test_suggestions(suggestion_rects, point_x, point_y):
+    """독립 추천 hitbox 중 점을 포함하는 슬롯 인덱스를 반환한다."""
+
+    for index, rect in enumerate(suggestion_rects):
+        if rect.contains(point_x, point_y):
+            return index
+    return None
 
 
 def _clamp(value, lo, hi):
@@ -211,7 +304,16 @@ def calculate_keyboard_layout(screen_w, screen_h):
     input_x = outer_margin_x
     input_w = confirm_x - confirm_gap - input_x
 
+    suggestion_rect = (
+        outer_margin_x,
+        suggestion_y,
+        screen_w - 2 * outer_margin_x,
+        suggestion_h,
+    )
+
     return {
+        "screen_w": screen_w,
+        "screen_h": screen_h,
         "outer_margin_x": outer_margin_x,
         "key_gap_x": key_gap_x,
         "char_key_w": char_key_w,
@@ -227,11 +329,10 @@ def calculate_keyboard_layout(screen_w, screen_h):
 
         "input_rect": (input_x, input_y, input_w, input_h),
         "confirm_rect": (confirm_x, input_y, confirm_w, input_h),
-        "suggestion_rect": (
-            outer_margin_x,
-            suggestion_y,
-            screen_w - 2 * outer_margin_x,
-            suggestion_h
+        "suggestion_rect": suggestion_rect,
+        "suggestion_rects": calculate_suggestion_rects(
+            suggestion_rect,
+            key_gap_x,
         ),
 
         "keyboard_top": keyboard_top,
@@ -298,7 +399,7 @@ def _create_row_buttons(row, y, layout):
     row_h = layout["row_h"]
 
     row_width = len(row) * key_w + (len(row) - 1) * key_gap
-    start_x = (SCREEN_W - row_width) // 2
+    start_x = (layout["screen_w"] - row_width) // 2
 
     buttons = []
     x = start_x
@@ -339,7 +440,7 @@ def create_function_buttons(layout=None):
     row_h = layout["function_row_h"]
 
     area_x = outer_margin_x
-    area_w = SCREEN_W - 2 * outer_margin_x
+    area_w = layout["screen_w"] - 2 * outer_margin_x
 
     space_w = int(area_w * 0.42)
     space_x = area_x + (area_w - space_w) // 2
@@ -422,7 +523,7 @@ def create_cheonjiin_function_buttons(layout=None):
     천지인 하단 기능키를 생성한다.
 
     배치 순서:
-    한/영 → 스페이스 → 뒤돌리기
+    한/영 → 스페이스 → 되돌리기
 
     내부 판정값은 기존 process_key와의 호환을 위해
     '한/영', ' ', 'Del'을 그대로 사용한다.
@@ -477,7 +578,8 @@ def create_cheonjiin_function_buttons(layout=None):
             [delete_x, y],
             "Del",
             size=[delete_w, row_h],
-            font_role="function_small"
+            font_role="function_small",
+            display_label="되돌리기"
         ),
     ]
 
@@ -507,11 +609,13 @@ def create_cheonjiin_buttons(layout=None):
         + [confirm_button]
     )
 
-def create_buttons(keys):
+def create_buttons(keys, layout=None):
 
-    character_buttons = create_character_buttons(keys)
-    function_buttons = create_function_buttons()
-    confirm_button = create_confirm_button()
+    layout = layout or LAYOUT
+
+    character_buttons = create_character_buttons(keys, layout)
+    function_buttons = create_function_buttons(layout)
+    confirm_button = create_confirm_button(layout)
 
     return character_buttons + function_buttons + [confirm_button]
 
@@ -561,11 +665,175 @@ def _diff_tail(before, after):
     return deleted_count, inserted_text
 
 
+def apply_suggestion(
+    suggestion,
+    is_korean,
+    keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
+):
+    """화면에 보이는 마지막 입력 단어를 추천 문장으로 교체합니다.
+
+    조합 중인 자모와 천지인 pending preview까지 포함한 문자열을 기준으로
+    교체하므로, 선택 전 화면과 선택 후 ``finalText`` 사이의 꼬리 diff를
+    정확히 반환합니다. 선택 결과는 확정 문자열로 두고 모든 조합 상태를
+    한 곳에서 초기화합니다.
+    """
+
+    if not isinstance(suggestion, str) or not suggestion:
+        return 0, ""
+
+    from src import hangul
+
+    composite_before = _composite_text(is_korean, keyboard_layout)
+    last_space_index = composite_before.rfind(" ")
+    preserved_prefix = composite_before[:last_space_index + 1]
+    composite_after = preserved_prefix + suggestion
+
+    hangul.finalText = composite_after
+    hangul.jamo_buffer[:] = ['', '', '']
+    cheonjiin_composer.reset()
+
+    return _diff_tail(composite_before, composite_after)
+
+
+class PendingWordBoundaryState:
+    """추천 선택 뒤 다음 단어의 공백을 실제 문자 입력까지 지연합니다."""
+
+    _CLEARING_KEYS = {"Del", "확인", "Enter"}
+    _PRESERVING_FUNCTION_KEYS = {"Shift", "한/영"}
+
+    def __init__(self):
+        self.pending_word_boundary = False
+
+    def mark_pending(self):
+        self.pending_word_boundary = True
+
+    def clear(self):
+        self.pending_word_boundary = False
+
+    @staticmethod
+    def _is_word_forming_key(key):
+        return (
+            key in CHEONJIIN_CHARACTER_KEYS
+            or (isinstance(key, str) and key.isalnum())
+        )
+
+    @staticmethod
+    def _commit_visible_input(is_korean, keyboard_layout):
+        """문장부호 등 화면상의 조합 문자열을 공백 앞에 확정합니다."""
+
+        if (
+            keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+            and is_korean
+        ):
+            cheonjiin_composer.commit()
+        elif is_korean:
+            flush_buffer()
+
+    def handle_key(
+        self,
+        key,
+        is_korean,
+        is_shift,
+        button_list,
+        keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
+    ):
+        """실제 키 한 건과 필요한 자동 공백을 하나의 diff로 처리합니다."""
+
+        if not self.pending_word_boundary:
+            return process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+
+        from src import hangul
+
+        composite_before = _composite_text(is_korean, keyboard_layout)
+
+        if key == " ":
+            self._commit_visible_input(is_korean, keyboard_layout)
+            if not hangul.finalText.endswith(" "):
+                hangul.finalText += " "
+            self.clear()
+            deleted_count, inserted_text = _diff_tail(
+                composite_before,
+                _composite_text(is_korean, keyboard_layout),
+            )
+            return (
+                is_korean,
+                is_shift,
+                button_list,
+                deleted_count,
+                inserted_text,
+            )
+
+        if key in self._CLEARING_KEYS:
+            self.clear()
+            return process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+
+        if key in self._PRESERVING_FUNCTION_KEYS:
+            return process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+
+        if self._is_word_forming_key(key):
+            self._commit_visible_input(is_korean, keyboard_layout)
+            if not hangul.finalText.endswith(" "):
+                hangul.finalText += " "
+            self.clear()
+
+            result = process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+            next_is_korean, next_is_shift, next_button_list = result[:3]
+            deleted_count, inserted_text = _diff_tail(
+                composite_before,
+                _composite_text(next_is_korean, keyboard_layout),
+            )
+            return (
+                next_is_korean,
+                next_is_shift,
+                next_button_list,
+                deleted_count,
+                inserted_text,
+            )
+
+        # 문장부호는 공백 없이 처리하고 다음 일반 문자까지 pending을 유지한다.
+        return process_key(
+            key,
+            is_korean,
+            is_shift,
+            button_list,
+            keyboard_layout,
+        )
+
+
 def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):
     from src import hangul
     is_cheonjiin = (
         keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
     )
+
+    # QWERTY로 레이아웃이 바뀐 뒤 천지인 순환 후보가 남지 않게 한다.
+    # QWERTY의 실제 입력 분기는 아래 기존 로직을 그대로 사용한다.
+    if not is_cheonjiin:
+        cheonjiin_composer.reset()
 
     composite_before = _composite_text(is_korean, keyboard_layout)
 
@@ -619,6 +887,28 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
             deleted_count,
             inserted_text
             )
+
+    # 천지인 조합/후보가 있으면 첫 스페이스는 확정 키로만 사용한다.
+    # commit()이 상태와 한글 버퍼를 비우므로 다음 스페이스는 아래 기존
+    # 공백 입력 분기로 내려간다.
+    if (
+        is_cheonjiin
+        and is_korean
+        and key == " "
+        and cheonjiin_composer.commit()
+    ):
+        deleted_count, inserted_text = _diff_tail(
+            composite_before,
+            _composite_text(is_korean, keyboard_layout)
+        )
+
+        return (
+            is_korean,
+            is_shift,
+            buttonList,
+            deleted_count,
+            inserted_text
+        )
 
     # 스페이스, 한/영, 확인, 되돌리기 등 기능키를 선택하면
     # 자음 연타 및 모음 요소 입력 상태를 종료한다.
@@ -781,7 +1071,5 @@ def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOU
 def get_button_center(buttonList, key_name):
     for btn in buttonList:
         if btn.text == key_name:
-            cx = btn.pos[0] + btn.size[0] / 2
-            cy = btn.pos[1] + btn.size[1] / 2
-            return (cx, cy)
+            return btn.rect.center
     return None

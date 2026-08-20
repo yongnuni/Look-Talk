@@ -39,20 +39,9 @@ from src.config import (
     MONITOR_DIAGONAL_INCH,
     SCREEN_W,
     SCREEN_H,
+    RIDGE_ALPHA,
+    RIDGE_DEGREE,
 )
-
-# config.py에 없으면 calibration.py의 fallback과 동일한 값을 등재한다
-# (src/tracking/calibration.py:24-32의 try/except와 동일한 패턴 — 이 파일은
-# calibration.py를 import하지 않고 값만 그대로 옮겨 적는다).
-try:
-    from src.config import RIDGE_ALPHA
-except ImportError:
-    RIDGE_ALPHA = 1.0  # calibration.py fallback과 동일 (src/tracking/calibration.py:24-27)
-
-try:
-    from src.config import RIDGE_DEGREE
-except ImportError:
-    RIDGE_DEGREE = 2  # calibration.py fallback과 동일 (src/tracking/calibration.py:29-32)
 
 
 def build_snapshot():
@@ -89,7 +78,7 @@ def build_snapshot():
         "max_calib_rmse_px": 150.0,           # src/tracking/calibration.py:615
         "mouth_mar_threshold": 0.30,          # src/tracking/mouth.py:64
         "mouth_hold_time_sec": 0.3,           # src/tracking/mouth.py:65
-        "cheonjiin_repeat_timeout_sec": 2.5,  # src/cheonjiin.py:93
+        "cheonjiin_repeat_timeout_sec": None, # 시간 제한 없는 확정 전 순환
         "targeting_dwell_sec": 1.0,           # main.py:552 (TargetingTestRunner 호출부)
         "targeting_timeout_sec": 5.0,         # main.py:553 (TargetingTestRunner 호출부)
         "targeting_prepare_sec": 2.0,         # tests/targeting_test_runner.py:42 (클래스 기본값 — main.py 호출부는 이 인자를 넘기지 않는다)

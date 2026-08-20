@@ -1,0 +1,80 @@
+text,priority,category,context
+도와주세요,500,emergency_safety,patient_staff
+응급이에요,500,emergency_safety,patient_staff
+간호사 불러주세요,500,emergency_safety,patient_staff
+의사 선생님 불러주세요,500,emergency_safety,patient_staff
+숨쉬기 힘들어요,500,emergency_safety,patient_staff
+호흡이 불편해요,500,emergency_safety,patient_staff
+가래가 막혔어요,500,emergency_safety,patient_staff
+목에 걸렸어요,500,emergency_safety,patient_staff
+사레가 들렸어요,500,emergency_safety,patient_staff
+통증이 심해요,500,emergency_safety,patient_staff
+너무 아파요,500,emergency_safety,patient_staff
+물 주세요,400,basic_care,patient_staff
+입이 말라요,400,basic_care,patient_staff
+가래를 빼주세요,400,basic_care,patient_staff
+침을 닦아주세요,400,basic_care,patient_staff
+자세를 바꿔주세요,400,basic_care,patient_staff
+몸을 돌려주세요,400,basic_care,patient_staff
+머리를 올려주세요,400,basic_care,patient_staff
+침대를 올려주세요,400,basic_care,patient_staff
+침대를 내려주세요,400,basic_care,patient_staff
+화장실 가고 싶어요,400,basic_care,patient_staff
+보호자를 불러주세요,400,basic_care,patient_staff
+이불을 덮어주세요,400,basic_care,patient_staff
+이불을 걷어주세요,400,basic_care,patient_staff
+불을 켜주세요,400,basic_care,patient_staff
+불을 꺼주세요,400,basic_care,patient_staff
+문을 열어주세요,400,basic_care,patient_staff
+문을 닫아주세요,400,basic_care,patient_staff
+잠시 쉬고 싶어요,400,basic_care,patient_staff
+삼키기 힘들어요,400,symptom_discomfort,patient_staff
+먹기 힘들어요,400,symptom_discomfort,patient_staff
+마시기 힘들어요,400,symptom_discomfort,patient_staff
+기침이 안 나와요,400,symptom_discomfort,patient_staff
+마스크가 불편해요,400,symptom_discomfort,patient_staff
+머리가 아파요,400,symptom_discomfort,patient_staff
+목이 아파요,400,symptom_discomfort,patient_staff
+등이 아파요,400,symptom_discomfort,patient_staff
+허리가 아파요,400,symptom_discomfort,patient_staff
+배가 아파요,400,symptom_discomfort,patient_staff
+팔이 아파요,400,symptom_discomfort,patient_staff
+다리가 아파요,400,symptom_discomfort,patient_staff
+왼쪽이 아파요,400,symptom_discomfort,patient_staff
+오른쪽이 아파요,400,symptom_discomfort,patient_staff
+덥습니다,400,symptom_discomfort,patient_staff
+춥습니다,400,symptom_discomfort,patient_staff
+어지러워요,400,symptom_discomfort,patient_staff
+메스꺼워요,400,symptom_discomfort,patient_staff
+저려요,400,symptom_discomfort,patient_staff
+간지러워요,400,symptom_discomfort,patient_staff
+피곤해요,400,symptom_discomfort,patient_staff
+네,300,communication,patient_staff
+아니요,300,communication,patient_staff
+괜찮습니다,300,communication,patient_staff
+필요합니다,300,communication,patient_staff
+필요 없습니다,300,communication,patient_staff
+멈춰주세요,300,communication,patient_staff
+잠시만 기다려주세요,300,communication,patient_staff
+다시 말해주세요,300,communication,patient_staff
+천천히 말해주세요,300,communication,patient_staff
+잘 모르겠어요,300,communication,patient_staff
+알겠습니다,300,communication,patient_staff
+안녕하세요,200,daily_conversation,patient_patient
+감사합니다,200,daily_conversation,patient_patient
+반갑습니다,200,daily_conversation,patient_patient
+괜찮으세요,200,daily_conversation,patient_patient
+오늘 어떠세요,200,daily_conversation,patient_patient
+잘 주무셨어요,200,daily_conversation,patient_patient
+식사하셨어요,200,daily_conversation,patient_patient
+힘내세요,200,daily_conversation,patient_patient
+응원할게요,200,daily_conversation,patient_patient
+좋은 아침이에요,200,daily_conversation,patient_patient
+편히 쉬세요,200,daily_conversation,patient_patient
+내일 봬요,200,daily_conversation,patient_patient
+무슨 일이에요,200,daily_conversation,patient_patient
+도움이 필요하세요,200,daily_conversation,patient_patient
+저도 그래요,200,daily_conversation,patient_patient
+걱정하지 마세요,200,daily_conversation,patient_patient
+대화하고 싶어요,200,daily_conversation,patient_patient
+조용히 쉬고 싶어요,200,daily_conversation,patient_patient

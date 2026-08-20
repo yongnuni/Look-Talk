@@ -1,23 +1,19 @@
-import cv2
-import numpy as np
-import csv
 import json
-import math
 import time
 import os
-from datetime import datetime
-from PIL import Image, ImageDraw
-from src.calibrations.baseline_manager import save_baseline, load_baseline
-from src.tracking.blink import BlinkDetector, BlinkKind
-import src.viz.viz as viz
-import matplotlib.pyplot as plt
+
+import cv2
+import numpy as np
+
+from src.calibrations.baseline_manager import save_baseline
+from src.tracking.blink import BlinkDetector
 from src.cheonjiin import cheonjiin_composer
 
 import src.hangul as hangul
 
 from src.common import clock, ids
 from src.common.config_snapshot import build_snapshot, snapshot_hash
-from src.metrics.csv_export import append_rows
+from src.common.git_info import get_git_commit
 
 from src.config import (
     SCREEN_W,
@@ -58,25 +54,20 @@ from src.tracking.mappers.factory import (
     create_mapper,
     MODE_CALIBRATED,
     MODE_NO_CALIBRATION,
-    AVAILABLE_MODES,
-    DEFAULT_NO_CALIBRATION_STRATEGY,
 )
-from src.tracking.mappers.strategies import available_strategies
 from src.metrics.session_logger import SessionLogger
 
-# ── 하이브리드(백본+릿지) 모듈 ──
-from src.tracking.gaze_backbone import GazeBackbone
 from src.tracking.feature_builder import build_features
 
 from src.keyboard import (
+    LAYOUT,
+    PendingWordBoundaryState,
+    apply_suggestion,
     create_buttons,
     create_cheonjiin_buttons,
-    process_key,
     keys_kor_normal,
     KEYBOARD_LAYOUT_QWERTY,
     KEYBOARD_LAYOUT_CHEONJIIN,
-    get_button_center,
-    DISPLAY_LABELS,
 )
 from src.metrics.input_event_logger import InputEventLogger
 
@@ -89,614 +80,31 @@ from src.ui import (
     draw_status_bar,
     draw_test_complete_overlay,
     draw_text_area,
+    draw_suggestion_boxes,
     draw_mouth_calibration_screen,
     draw_targeting_test_screen,
     draw_targeting_result_screen,
-    font
 )
 
 from tests.test_runner import TestRunner
 from tests.targeting_test_runner import TargetingTestRunner
-
-def auto_brightness(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    mean = np.mean(gray)
-
-    target = 120
-
-    alpha = target / max(mean, 1)
-
-    alpha = np.clip(alpha, 0.8, 1.5)
-
-    frame = cv2.convertScaleAbs(
-        frame,
-        alpha=alpha,
-        beta=0
-    )
-
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-
-    l, a, b = cv2.split(lab)
-
-    clahe = cv2.createCLAHE(
-        clipLimit=2.0,
-        tileGridSize=(8, 8)
-    )
-
-    l = clahe.apply(l)
-
-    lab = cv2.merge((l, a, b))
-
-    return cv2.cvtColor(
-        lab,
-        cv2.COLOR_LAB2BGR
-    )
-
 from src.metrics.collector import MetricsCollector
-
-MAX_SQPNP_DELTA_PX = 120
-
-# 백본 추론 주기 (프레임). CPU 부담을 줄이기 위해 N프레임마다 1회 추론하고
-# 그 사이에는 마지막 시선 벡터를 재사용합니다. 1이면 매 프레임 추론.
-BACKBONE_INFER_EVERY = 2
-
-# 9점 테스트 (개발용)
-
-def run_gaze_accuracy_test(
-    cap,
-    face_mesh,
-    calibrator,
-    gaze,
-    collector,
-    blink_detector,
-    use_pose_corrected,
-    use_sqpnp_corrected=False,
-    use_ridge=False,
-    backbone=None
-):
-    os.makedirs("gaze_accuracy_results", exist_ok=True)
-
-    if use_ridge:
-        mode_name = "ridge_hybrid"
-    elif use_sqpnp_corrected:
-        mode_name = "sqpnp_corrected"
-    elif use_pose_corrected:
-        mode_name = "pose_corrected"
-    else:
-        mode_name = "raw"
-
-    test_points = [
-
-        (0.1, 0.1),
-        (0.5, 0.1),
-        (0.9, 0.1),
-
-        (0.1, 0.5),
-        (0.5, 0.5),
-        (0.9, 0.5),
-
-        (0.1, 0.9),
-        (0.5, 0.9),
-        (0.9, 0.9),
-    ]
-
-    results = []
-
-    backbone_frame_count = 0
-    last_gaze_vec = None
-
-    for idx, (rx, ry) in enumerate(test_points):
-
-        target_x = int(SCREEN_W * rx)
-        target_y = int(SCREEN_H * ry)
-
-        
-        collector.start_target(idx, target_x, target_y)
-
-        samples_x = []
-        samples_y = []
-
-        start_time = time.time()
-
-        while time.time() - start_time < 3.0:
-
-            ret, frame = cap.read()
-
-            if not ret:
-                continue
-
-            frame = cv2.flip(frame, 1)
-
-            frame = auto_brightness(frame)
-
-            # ── 프레임 단위 기본값 (STB 신호용) ──
-            face_detected = False
-            gaze_x = -1
-            gaze_y = -1
-
-            rgb = cv2.cvtColor(
-                frame,
-                cv2.COLOR_BGR2RGB
-            )
-
-            result = face_mesh.process(rgb)
-
-            canvas = np.zeros(
-                (SCREEN_H, SCREEN_W, 3),
-                dtype=np.uint8
-            )
-
-            cv2.circle(
-                canvas,
-                (target_x, target_y),
-                20,
-                (0,255,255),
-                -1
-            )
-
-            if result.multi_face_landmarks:
-
-                lms = result.multi_face_landmarks[0]
-                face_detected = True
-
-                iris_x, iris_y = get_avg_iris(lms)
-
-                fh, fw = frame.shape[:2]
-
-                head_pose = estimate_head_pose(
-                    lms,
-                    fw,
-                    fh
-                )
-
-                sqpnp_headpose = estimate_sqpnp_headpose(
-                    lms,
-                    fw,
-                    fh
-                )
-
-                # ── 하이브리드: 시선 벡터 + 특징 벡터 ──
-                if backbone is not None and backbone.available:
-                    if backbone_frame_count % BACKBONE_INFER_EVERY == 0:
-                        last_gaze_vec = backbone.predict(frame, lms)
-                    backbone_frame_count += 1
-
-                features = build_features(
-                    iris_x,
-                    iris_y,
-                    lms,
-                    head_pose,
-                    gaze_vec=last_gaze_vec,
-                    frame_width=fw
-                )
-
-                # Raw 좌표
-                raw_sx, raw_sy = calibrator.map_to_screen(
-                    iris_x,
-                    iris_y
-                )
-
-                blink_detector.update(lms)
-                # 머리 자세 보정 좌표
-                corrected_iris_x, corrected_iris_y = (
-                    calibrator.compensate_iris_by_head_pose(
-                        iris_x,
-                        iris_y,
-                        head_pose
-                    )
-                )
-
-                corrected_sx, corrected_sy = calibrator.map_to_screen(
-                    corrected_iris_x,
-                    corrected_iris_y
-                )
-
-                sqpnp_corrected_iris_x, sqpnp_corrected_iris_y = (
-                    calibrator.compensate_iris_by_head_pose(
-                        iris_x,
-                        iris_y,
-                        sqpnp_headpose
-                    )
-                )
-
-                sqpnp_corrected_sx, sqpnp_corrected_sy = calibrator.map_to_screen(
-                    sqpnp_corrected_iris_x,
-                    sqpnp_corrected_iris_y
-                )
-
-                if (
-                    use_sqpnp_corrected
-                    and raw_sx is not None
-                    and raw_sy is not None
-                    and sqpnp_corrected_sx is not None
-                    and sqpnp_corrected_sy is not None
-                ):
-                    sqpnp_delta_x = np.clip(
-                        sqpnp_corrected_sx - raw_sx,
-                        -MAX_SQPNP_DELTA_PX,
-                        MAX_SQPNP_DELTA_PX
-                    )
-                    sqpnp_delta_y = np.clip(
-                        sqpnp_corrected_sy - raw_sy,
-                        -MAX_SQPNP_DELTA_PX,
-                        MAX_SQPNP_DELTA_PX
-                    )
-                    sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
-                    sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
-
-                # ── 릿지 하이브리드 좌표 ──
-                ridge_sx, ridge_sy = calibrator.map_to_screen_features(
-                    features
-                )
-
-                if use_ridge and ridge_sx is not None and ridge_sy is not None:
-                    sx, sy = ridge_sx, ridge_sy
-                elif use_ridge:
-                    # 릿지 실패 프레임은 raw로 폴백 (커서 유지 원칙)
-                    sx, sy = raw_sx, raw_sy
-                elif use_sqpnp_corrected:
-                    sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
-                elif use_pose_corrected:
-                    sx, sy = corrected_sx, corrected_sy
-                else:
-                    sx, sy = raw_sx, raw_sy
-
-                blink = blink_detector.is_closed
-                conf = iris_confidence(lms)
-
-                gaze_x, gaze_y, _ = gaze.update(
-                    sx,
-                    sy,
-                    conf,
-                    blink,
-                    head_pose=head_pose
-                )
-
-                elapsed = time.time() - start_time
-
-                
-                if elapsed >= 1.0:
-
-                    tracking_valid = (
-                        gaze_x is not None
-                        and gaze_y is not None
-                        and np.isfinite(gaze_x)
-                        and np.isfinite(gaze_y)
-                        and not (gaze_x == -1 and gaze_y == -1)
-                    )
-
-                    if tracking_valid:
-                        samples_x.append(gaze_x)
-                        samples_y.append(gaze_y)
-
-                        collector.add_sample(
-                            gaze_x,
-                            gaze_y,
-                            iris_x * fw,
-                            iris_y * fh
-                        )
-
-            # ── STB 프레임 통계 기록 (얼굴 미검출 프레임도 포함) ──
-            gaze_valid = (gaze_x >= 0 and gaze_y >= 0)
-            collector.add_frame(
-                face_detected=face_detected,
-                gaze_valid=gaze_valid,
-                timestamp=time.time()
-            )
-
-            cv2.imshow(
-                "Eye Keyboard",
-                canvas
-            )
-
-            cv2.waitKey(1)
-
-        if len(samples_x) == 0:
-            collector.end_target()
-            continue
-
-        pred_x = np.mean(samples_x)
-        pred_y = np.mean(samples_y)
-
-        error = math.sqrt(
-            (pred_x-target_x)**2 +
-            (pred_y-target_y)**2
-        )
-
-        results.append([
-            mode_name,
-            idx+1,
-            target_x,
-            target_y,
-            pred_x,
-            pred_y,
-            error
-        ])
-
-        collector.end_target()
-
-    errors = [r[6] for r in results]
-
-    avg_error = np.mean(errors)
-    max_error = np.max(errors)
-    min_error = np.min(errors)
-    std_error = np.std(errors)
-
-    filename = datetime.now().strftime(
-        f"gaze_accuracy_{mode_name}_%Y%m%d_%H%M%S.csv"
-    )
-
-    filepath = os.path.join(
-        "gaze_accuracy_results",
-        filename
-    )
-
-    with open(
-        filepath,
-        "w",
-        newline="",
-        encoding="utf-8-sig"
-    ) as f:
-
-        writer = csv.writer(f)
-
-        writer.writerow([
-            "mode",
-            "point",
-            "target_x",
-            "target_y",
-            "pred_x",
-            "pred_y",
-            "error_px"
-        ])
-
-        writer.writerows(results)
-
-        writer.writerow([])
-
-        writer.writerow([
-            "Average Error(px)",
-            avg_error
-        ])
-
-        writer.writerow([
-            "Max Error(px)",
-            max_error
-        ])
-
-        writer.writerow([
-            "Min Error(px)",
-            min_error
-        ])
-
-        writer.writerow([
-            "Std Error(px)",
-            std_error
-        ])
-
-    print(
-        f"\nCSV 저장 완료: {filepath}"
-    )
-
-    print("\n===== GAZE TEST =====")
-    print(f"Mode : {mode_name}")
-    print(f"Average Error : {avg_error:.2f}px")
-    print(f"Max Error : {max_error:.2f}px")
-    print(f"Min Error : {min_error:.2f}px")
-    print(f"Std Error : {std_error:.2f}px")
-    print("=====================")
-
-    # ── collector 내보내기 ──
-    out_dir = "gaze_accuracy_results"
-
-    collector.export_csv(
-        sessions_path=os.path.join(
-            out_dir,
-            f"sessions_v{MetricsCollector.SCHEMA_VERSION}.csv"
-        ),
-        accuracy_path=os.path.join(
-            out_dir,
-            f"gaze_accuracy_v{MetricsCollector.SCHEMA_VERSION}.csv"
-        ),
-        export_session=False,
-        export_accuracy=True
-    )
-    print("[metrics] collector CSV 저장 완료:", out_dir)
-
-
-# 테스트 결과 자동 시각화 (개발용)
-
-def show_session_popup(test_id):
-    try:
-        viz.setup_font()
-        df = viz.load_data("gaze_accuracy_results")
-        s = viz.get_session(df, test_id)
-
-        if len(s) == 0:
-            print(f"[popup] 세션을 찾을 수 없음: {test_id}")
-            return
-
-        print(viz.format_summary_line(viz.summarize_session(s)))
-
-        screen_w, screen_h = viz.infer_screen_size(s)
-        viz.plot_session_overview(s, screen_w, screen_h)
-        plt.show()
-
-    except Exception as e:
-        print(f"[popup] 시각화 실패: {e}")
-
-
-def export_targeting_results(run_id, keyboard_layout, targeting_runner, aborted):
-    """10회 원형 타겟팅 테스트 결과를 타깃 1개당 1행으로 저장한다.
-
-    지금까지는 get_results()가 화면 렌더링에만 쓰이고 앱 종료 시 그대로
-    소실됐다(docs/current_state_report.md 1-2절). TargetingTestRunner
-    자체는 팀원 코드라 손대지 않고, 여기(main.py)에서 완료·중도 종료
-    시점에 결과만 꺼내 CSV로 내보낸다.
-
-    input_mode는 TargetAttempt.reason("dwell"/"selection_hit"/
-    "selection_miss"/"timeout")에서 역산한다 — 러너가 이미 구분해 두고
-    있어 별도 판정 로직을 추가하지 않는다. target_x/y, cursor(=selected)_x/y도
-    TargetAttempt에 이미 있어 함께 기록한다.
-
-    reason → input_mode 매핑 근거 (tests/targeting_test_runner.py 기준,
-    팀원 코드라 확인만 하고 직접 수정하지 않음):
-    - "dwell": update_dwell()의 성공 분기(targeting_test_runner.py:280-287)
-      에서만 설정된다. gaze가 dwell_sec 이상 연속으로 타겟 내부에 머물렀을
-      때만 도달하는 경로라 mouth_click과 무관 — "dwell" 트리거로 확정.
-    - "selection_hit"/"selection_miss": register_selection()
-      (targeting_test_runner.py:313-328)에서만 설정되고, 이 메서드는
-      main.py에서 mouth.update()의 반환값 mouth_click이 True일 때만
-      호출된다(위 mouth_click, mar = mouth.update(...) 및 아래
-      register_selection() 호출부 참고) — "mouth"(입벌림) 트리거로 확정.
-    - "timeout": update_dwell()의 타임아웃 분기(targeting_test_runner.py:
-      258-265)에서 설정된다. update_dwell()과 mouth_click 판정(바로 위
-      if/else 블록)은 targeting_mode 활성 중 매 프레임 mouth_mode 값과
-      무관하게 함께 실행된다 — 즉 한 trial 안에서 dwell·mouth 두 트리거가
-      항상 동시에 살아있어, timeout은 "둘 다 시간 안에 성공하지 못함"만
-      의미할 뿐 사용자가 어느 쪽을 시도했는지 구분할 근거가 없다. 추측으로
-      채우지 않고 input_mode를 비워 기록한다(None).
-    """
-    if not targeting_runner.attempts:
-        return
-
-    fieldnames = [
-        "run_id",
-        "keyboard_layout",
-        "ts_ms",
-        "target_index",
-        "success",
-        "reaction_time_sec",
-        "input_mode",
-        "timeout",
-        "target_x",
-        "target_y",
-        "cursor_x",
-        "cursor_y",
-        "aborted",
-    ]
-
-    ts_ms = clock.now_ms()
-    rows = []
-
-    for attempt in targeting_runner.attempts:
-        if attempt.reason == "dwell":
-            input_mode = "dwell"  # update_dwell() 성공 분기 전용 — 근거는 위 함수 docstring
-        elif attempt.reason in ("selection_hit", "selection_miss"):
-            input_mode = "mouth"  # register_selection()은 mouth_click=True일 때만 호출됨
-        else:
-            input_mode = None  # timeout: dwell·mouth 트리거가 동시에 살아있어 구분 불가 — 추측 금지
-
-        rows.append({
-            "run_id": run_id,
-            "keyboard_layout": keyboard_layout,
-            "ts_ms": ts_ms,
-            "target_index": attempt.trial,
-            "success": attempt.success,
-            "reaction_time_sec": round(attempt.reaction_time_sec, 3),
-            "input_mode": input_mode,
-            "timeout": attempt.reason == "timeout",
-            "target_x": attempt.target_x,
-            "target_y": attempt.target_y,
-            "cursor_x": attempt.selected_x,
-            "cursor_y": attempt.selected_y,
-            "aborted": aborted,
-        })
-
-    append_rows(
-        os.path.join("gaze_accuracy_results", "targeting_results_v1.0.csv"),
-        fieldnames,
-        rows,
-    )
-
-
-def append_mouth_baseline_history(run_id, saved_path):
-    """baseline.json 저장 시마다 calibration_results/mouth_baseline_history_v1.0.csv에
-    1행을 append한다.
-
-    baseline_manager.py(src/calibrations/)는 팀원 영역이라 건드리지 않는다 —
-    baseline.json의 덮어쓰기 동작 자체는 그대로 두고, 방금 그 파일이 쓰인
-    직후 이미 있는 load_baseline()으로 다시 읽어(=수정 없이 읽기 전용 재사용)
-    이력만 별도로 쌓는다. saved_at은 baseline_manager.py가 실제로 쓴 값을
-    그대로 가져온다(main.py에서 새로 datetime.now()를 부르면 미세하게
-    다른 값이 될 수 있어, "기존 값 유지" 요구를 정확히 지키기 위해
-    저장된 파일을 다시 읽는 방식을 택했다).
-    """
-    baseline = load_baseline(saved_path)
-
-    if baseline is None:
-        print(f"[baseline] 이력 CSV 기록 실패: {saved_path}를 다시 읽지 못함")
-        return
-
-    mouth_result = baseline.get("mouth") or {}
-
-    row = {
-        "run_id": run_id,
-        "ts_ms": clock.now_ms(),
-        "saved_at": baseline.get("saved_at"),
-    }
-    row.update(mouth_result)
-
-    fieldnames = ["run_id", "ts_ms", "saved_at"] + list(mouth_result.keys())
-
-    append_rows(
-        os.path.join("calibration_results", "mouth_baseline_history_v1.0.csv"),
-        fieldnames,
-        [row],
-    )
-
-
-def log_input_tap(
-    input_event_logger,
-    frame_id,
-    input_mode,
-    keyboard_layout,
-    key_id,
-    button_list,
-    target_char,
-    hover_start_ts_ms,
-    cursor_x,
-    cursor_y,
-    deleted_count,
-    inserted_text,
-    trigger_signal,
-):
-    """dwell/mouth 훅 공용 - tap_commit 이벤트 한 건을 InputEventLogger에 넘긴다.
-
-    button_list는 반드시 process_key() 호출 "이전" 버튼 목록이어야 한다 -
-    한/영 전환처럼 process_key()가 buttonList 자체를 새로 만들면, 방금 누른
-    key_id(예: "ㅂ")가 새 버튼 목록에는 없어 key_center를 못 찾기 때문이다.
-    target_char도 마찬가지로 호출자가 process_key() 호출 "이전"에 계산해
-    넘겨야 한다 - 이 탭이 실제로 노렸던 목표 문자를 남기려는 것이지,
-    이 탭 이후 다음에 쳐야 할 문자를 남기려는 게 아니다.
-    """
-    key_center = get_button_center(button_list, key_id)
-    key_center_x, key_center_y = key_center if key_center else (None, None)
-
-    hover_to_commit_ms = (
-        clock.now_ms() - hover_start_ts_ms
-        if hover_start_ts_ms is not None
-        else None
-    )
-
-    input_event_logger.log_tap_commit(
-        frame_id=frame_id,
-        input_mode=input_mode,
-        keyboard_layout=keyboard_layout,
-        key_id=key_id,
-        key_label=DISPLAY_LABELS.get(key_id, key_id),
-        is_backspace=(key_id == "Del"),
-        deleted_count=deleted_count,
-        inserted_text=inserted_text,
-        hover_to_commit_ms=hover_to_commit_ms,
-        cursor_x=cursor_x,
-        cursor_y=cursor_y,
-        key_center_x=key_center_x,
-        key_center_y=key_center_y,
-        target_char=target_char,
-        trigger_signal=trigger_signal,
-    )
+from src.vision.preprocessing import auto_brightness
+from src.app.cli import parse_args
+from src.metrics.baseline_history import append_mouth_baseline_history
+from src.metrics.tap_logging import log_input_tap
+from src.recommendation import (
+    SuggestionStateController,
+    format_suggestion_update,
+    initialize_recommender,
+)
+from src.recommendation.selection import (
+    SuggestionTarget,
+    resolve_input_target,
+    target_log_id,
+)
+from src.testing.targeting_export import export_targeting_results
+from src.testing.gaze_accuracy import run_gaze_accuracy_test, show_session_popup
 
 
 def main(
@@ -704,12 +112,23 @@ def main(
     strategy_name=None,
     keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
     user_id="yejin",
+    condition_label="",
     calib_point_count=16
 ):
     # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
     clock.init()
     run_id = ids.new_run_id()
+
+    suggestion_engine = initialize_recommender()
+    suggestion_state = SuggestionStateController()
+    if suggestion_engine.available:
+        print(
+            "[suggestions] initialized "
+            f"wordfreq={suggestion_engine.wordfreq_count} "
+            f"hospital={suggestion_engine.hospital_count} "
+            f"elapsed_ms={suggestion_engine.initialization_ms:.2f}"
+        )
 
     # 실험 조건 스냅샷: 9점 테스트('t') 여부와 무관하게 sessions 행에는
     # 항상 필요하므로 앱 실행 시작 시점에 1회 고정한다. config.py는 프로세스
@@ -719,6 +138,13 @@ def main(
     config_json = json.dumps(
         config_snapshot_dict, sort_keys=True, ensure_ascii=False
     )
+
+    # git_commit: config_hash는 파라미터만 포착하므로 코드를 바꾸고 파라미터가
+    # 그대로면 두 조건이 같은 해시로 뭉친다 — 코드 버전(기능 실험 조건)은
+    # 별도로 여기서 1회 취득해 재사용한다(호출마다 subprocess를 새로 띄우지
+    # 않기 위함). config_snapshot에는 넣지 않는다 — 코드 버전은 파라미터가
+    # 아니므로 넣으면 커밋할 때마다 해시가 갈려 파라미터 실험 그룹핑이 깨진다.
+    git_commit = get_git_commit()
 
     cap = cv2.VideoCapture(0)
 
@@ -777,6 +203,7 @@ def main(
     gaze = GazePipeline()
     dwell = DwellController()
     mouth = MouthClickDetector()
+    word_boundary_state = PendingWordBoundaryState()
     tester = TestRunner(run_id=run_id)
 
     targeting_runner = TargetingTestRunner(
@@ -795,11 +222,6 @@ def main(
         detect_natural=True,
         detect_intentional=True
     )
-
-    # ── 하이브리드 백본 초기화 ──
-    # 모델 파일이 없거나 onnxruntime 미설치면 available=False로만 남고
-    # 기존 파이프라인은 그대로 동작합니다 (릿지는 기하 특징만으로 학습됨).
-    backbone = GazeBackbone()
 
     is_korean = True
     is_shift = False
@@ -824,10 +246,6 @@ def main(
     last_gaze_x = SCREEN_W // 2
     last_gaze_y = SCREEN_H // 2
 
-    # 백본 추론 스로틀링 상태
-    backbone_frame_count = 0
-    last_gaze_vec = None
-
     # 메인 루프 프레임 카운터 (SessionLogger와는 별개 - 4단계에서
     # SessionLogger 스키마를 올릴 때 같은 값을 공유시킬 예정).
     frame_id = 0
@@ -838,10 +256,21 @@ def main(
     hover_start_ts_ms = None
     hover_start_key = None
 
+    # main() 재호출 또는 레이아웃 변경 전 실행에서 남은 천지인 후보를 제거한다.
+    cheonjiin_composer.reset()
+
     if keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN:
         buttonList = create_cheonjiin_buttons()
     else:
         buttonList = create_buttons(keys_kor_normal)
+
+    suggestion_rects = LAYOUT["suggestion_rects"]
+    initial_suggestion_context = (
+        suggestion_state.last_current_text,
+        suggestion_state.slots,
+    )
+    dwell.set_target_context(initial_suggestion_context)
+    mouth.set_target_context(initial_suggestion_context)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
@@ -905,7 +334,10 @@ def main(
             fixation_count = 0
             elapsed_ratio = 0.0
             mouth_click = False
+            hovered_target = None
             hovered_key = None
+            hovered_suggestion_index = None
+            clicked_target = None
             clicked_key = None
             dwell_ratio = 0.0
             mar = 0.0
@@ -977,20 +409,13 @@ def main(
                 blink = blink_detector.is_closed
                 conf = iris_confidence(lms)                
                 
-                # ── 하이브리드: 시선 벡터 추론 (스로틀링) + 특징 벡터 ──
                 # 캘리브레이션 단계에서도 릿지 학습용 특징을 쌓아야 하므로
                 # calibrator.done 여부와 무관하게 여기서 계산합니다.
-                if backbone.available:
-                    if backbone_frame_count % BACKBONE_INFER_EVERY == 0:
-                        last_gaze_vec = backbone.predict(frame, lms)
-                    backbone_frame_count += 1
-
                 features = build_features(
                     iris_x,
                     iris_y,
                     lms,
                     head_pose,
-                    gaze_vec=last_gaze_vec,
                     frame_width=fw
                 )
 
@@ -1024,6 +449,7 @@ def main(
                 if mouth_mode and not mouth_calibrator.done:
                     mar = mouth_aspect_ratio(lms)
                     mouth_progress = mouth_calibrator.update(mar)
+
                     if mouth_calibrator.done:
                         mouth_result = mouth_calibrator.get_result_dict()
 
@@ -1033,12 +459,34 @@ def main(
 
                         saved_path = save_baseline(
                             mouth_result=mouth_result
-                    )
+                        )
 
                         print(f"[baseline] 저장 완료: {saved_path}")
-                        append_mouth_baseline_history(run_id, saved_path)
-                        mouth = MouthClickDetector()
+
+                        append_mouth_baseline_history(
+                            run_id,
+                            saved_path
+                        )
+
+                        # -----------------------------------------
+                        # 개인별 MAR Threshold 실제 적용
+                        # -----------------------------------------
+
+                        mouth.set_thresholds(
+                            mouth_result["open_threshold"],
+                            mouth_result["close_threshold"]
+                        )
+
+                        print(
+                            "[mouth] 개인별 Threshold 적용 완료 | "
+                            f"open={mouth_result['open_threshold']:.3f}, "
+                            f"close={mouth_result['close_threshold']:.3f}"
+                        )
+
+                        # 이전 입력 상태 초기화
                         dwell.reset()
+                        mouth.reset()
+
                         hover_start_ts_ms = None
                         hover_start_key = None
 
@@ -1052,7 +500,10 @@ def main(
                         remaining
                     )
 
-                    cv2.imshow("Eye Keyboard", mouth_canvas)
+                    cv2.imshow(
+                        "Eye Keyboard",
+                        mouth_canvas
+                    )
 
                     key = cv2.waitKey(1) & 0xFF
 
@@ -1061,6 +512,7 @@ def main(
 
                     elif key == ord('r'):
                         mouth_calibrator.reset()
+                        mouth.reset()
 
                     continue
 
@@ -1188,6 +640,7 @@ def main(
                         # 10회 완료 시점(이 attempt로 completed=True가 된 프레임)에
                         # 딱 한 번만 저장한다.
                         if targeting_runner.completed:
+                            cheonjiin_composer.reset()
                             export_targeting_results(
                                 run_id,
                                 keyboard_layout,
@@ -1246,6 +699,7 @@ def main(
                         )
                     targeting_mode = False
                     targeting_runner.reset()
+                    cheonjiin_composer.reset()
                     dwell.reset()
                     mouth.reset()
                     hover_start_ts_ms = None
@@ -1258,6 +712,7 @@ def main(
 
                 # 결과 화면 또는 진행 중 Y 키를 누르면 처음부터 재시작
                 elif targeting_key == ord('y'):
+                    cheonjiin_composer.reset()
                     targeting_runner.start()
                     dwell.reset()
                     mouth.reset()
@@ -1270,38 +725,86 @@ def main(
                 # 일반 키보드 입력·렌더링을 실행하지 않는다.
                 continue
 
-            # ── 드웰 클릭 ─────────────────────────────────────
+            # ── 입력 방식 처리 ─────────────────────────────────
 
             if tracking_valid:
-                hovered_key, dwell_ratio, clicked_key = dwell.update(
+                # 추천 hitbox는 buttonList와 분리한 채, 현재 프레임의 추천/키
+                # 중 하나만 공통 선택 대상으로 만든다.
+                hovered_target = resolve_input_target(
+                    suggestion_rects,
+                    suggestion_state.slots,
+                    buttonList,
                     gaze_x,
                     gaze_y,
-                    buttonList
                 )
+                if isinstance(hovered_target, SuggestionTarget):
+                    hovered_suggestion_index = hovered_target.index
+                else:
+                    hovered_key = hovered_target
 
-                mouth_click, mar = mouth.update(
-                    lms,
-                    hovered_key
-                )
+                # =================================================
+                # 입벌림 입력 모드
+                # =================================================
+                if mouth_mode:
+                    # 드웰 입력은 사용하지 않음
+                    dwell.reset()
+
+                    dwell_ratio = 0.0
+
+                    # 실제 클릭은 입벌림으로만 수행
+                    mouth_click, mar = mouth.update(
+                        lms,
+                        hovered_target
+                    )
+                    if mouth_click:
+                        clicked_target = mouth.selected_key
+
+                # =================================================
+                # 시선 Dwell 입력 모드
+                # =================================================
+                else:
+                    (
+                        active_target,
+                        dwell_ratio,
+                        clicked_target,
+                    ) = dwell.update_target(hovered_target)
+                    if active_target is None:
+                        hovered_target = None
+                        hovered_key = None
+                        hovered_suggestion_index = None
+
+                    # 시선 입력 모드에서는 입벌림 선택 비활성화
+                    mouth.reset()
+
+                    mouth_click = False
+                    mar = mouth_aspect_ratio(lms)
+
             else:
+
                 dwell.reset()
+                mouth.reset()
+
+                hovered_target = None
                 hovered_key = None
+                hovered_suggestion_index = None
+                clicked_target = None
                 clicked_key = None
+
                 dwell_ratio = 0.0
                 mouth_click = False
                 mar = 0.0
 
-            # hover 추적(dwell/mouth 공용) - hovered_key가 바뀔 때만 시작
+            # hover 추적(dwell/mouth 공용) - 선택 대상이 바뀔 때만 시작
             # 시각을 새로 찍는다. tap_commit이 발생하면 아래에서 즉시
             # 리셋해 다음 hover 사이클과 섞이지 않게 한다.
-            if hovered_key != hover_start_key:
-                hover_start_key = hovered_key
+            if hovered_target != hover_start_key:
+                hover_start_key = hovered_target
                 hover_start_ts_ms = (
-                    clock.now_ms() if hovered_key is not None else None
+                    clock.now_ms() if hovered_target is not None else None
                 )
 
-            # 기존 드웰 클릭
-            if clicked_key:
+            if clicked_target is not None:
+                input_mode = "mouth" if mouth_mode else "dwell"
                 tester.on_key_press()
 
                 pre_tap_button_list = buttonList
@@ -1311,83 +814,83 @@ def main(
                     else ""
                 )
 
-                (
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    deleted_count,
-                    inserted_text,
-                ) = process_key(
-                    clicked_key,
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    keyboard_layout
-                )
+                if isinstance(clicked_target, SuggestionTarget):
+                    deleted_count, inserted_text = apply_suggestion(
+                        clicked_target.text,
+                        is_korean,
+                        keyboard_layout,
+                    )
+                    word_boundary_state.mark_pending()
+                    suggestion_state.clear_after_selection(hangul.finalText)
+                    suggestion_context = (
+                        suggestion_state.last_current_text,
+                        suggestion_state.slots,
+                    )
+                    dwell.set_target_context(suggestion_context)
+                    mouth.set_target_context(suggestion_context)
 
-                log_input_tap(
-                    input_event_logger,
-                    frame_id=frame_id,
-                    input_mode="dwell",
-                    keyboard_layout=keyboard_layout,
-                    key_id=clicked_key,
-                    button_list=pre_tap_button_list,
-                    target_char=pre_tap_target_char,
-                    hover_start_ts_ms=hover_start_ts_ms,
-                    cursor_x=gaze_x,
-                    cursor_y=gaze_y,
-                    deleted_count=deleted_count,
-                    inserted_text=inserted_text,
-                    trigger_signal=None,
-                )
+                    log_input_tap(
+                        input_event_logger,
+                        frame_id=frame_id,
+                        input_mode=input_mode,
+                        keyboard_layout=keyboard_layout,
+                        key_id=clicked_target.key_id,
+                        key_label=clicked_target.text,
+                        key_center=(
+                            suggestion_rects[clicked_target.index].center
+                        ),
+                        button_list=pre_tap_button_list,
+                        target_char=pre_tap_target_char,
+                        hover_start_ts_ms=hover_start_ts_ms,
+                        cursor_x=gaze_x,
+                        cursor_y=gaze_y,
+                        deleted_count=deleted_count,
+                        inserted_text=inserted_text,
+                        trigger_signal=(mar if mouth_mode else None),
+                    )
+
+                    # 선택한 후보가 같은 프레임에 다시 hover 표시되지 않게 한다.
+                    hovered_target = None
+                    hovered_suggestion_index = None
+                    dwell_ratio = 0.0
+                else:
+                    selected_key = clicked_target
+                    (
+                        is_korean,
+                        is_shift,
+                        buttonList,
+                        deleted_count,
+                        inserted_text,
+                    ) = word_boundary_state.handle_key(
+                        selected_key,
+                        is_korean,
+                        is_shift,
+                        buttonList,
+                        keyboard_layout
+                    )
+
+                    log_input_tap(
+                        input_event_logger,
+                        frame_id=frame_id,
+                        input_mode=input_mode,
+                        keyboard_layout=keyboard_layout,
+                        key_id=selected_key,
+                        button_list=pre_tap_button_list,
+                        target_char=pre_tap_target_char,
+                        hover_start_ts_ms=hover_start_ts_ms,
+                        cursor_x=gaze_x,
+                        cursor_y=gaze_y,
+                        deleted_count=deleted_count,
+                        inserted_text=inserted_text,
+                        trigger_signal=(mar if mouth_mode else None),
+                    )
+
+                clicked_key = target_log_id(clicked_target)
                 hover_start_ts_ms = None
                 hover_start_key = None
 
-            # 입벌림 클릭
-            if mouth_click and hovered_key:
-
-                tester.on_key_press()
-
-                pre_tap_button_list = buttonList
-                pre_tap_target_char = (
-                    tester.get_target_char(len(hangul.finalText))
-                    if tester.active
-                    else ""
-                )
-
-                (
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    deleted_count,
-                    inserted_text,
-                ) = process_key(
-                    hovered_key,
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    keyboard_layout
-                )
-
-                log_input_tap(
-                    input_event_logger,
-                    frame_id=frame_id,
-                    input_mode="mouth",
-                    keyboard_layout=keyboard_layout,
-                    key_id=hovered_key,
-                    button_list=pre_tap_button_list,
-                    target_char=pre_tap_target_char,
-                    hover_start_ts_ms=hover_start_ts_ms,
-                    cursor_x=gaze_x,
-                    cursor_y=gaze_y,
-                    deleted_count=deleted_count,
-                    inserted_text=inserted_text,
-                    trigger_signal=mar,
-                )
-                hover_start_ts_ms = None
-                hover_start_key = None
-
-                print("MOUTH INPUT:", hovered_key)
+                if mouth_mode:
+                    print("MOUTH INPUT:", clicked_key)
 
 
             # ── 렌더링 ────────────────────────────────────────
@@ -1410,9 +913,53 @@ def main(
                 + pending_cheonjiin_text
             )
 
+            if word_boundary_state.pending_word_boundary:
+                suggestion_state.clear_after_selection(current_text)
+                suggestion_update = None
+            else:
+                suggestion_update = suggestion_state.update(current_text)
+            if suggestion_update is not None:
+                print(format_suggestion_update(suggestion_update))
+
+            suggestion_context = (
+                suggestion_state.last_current_text,
+                suggestion_state.slots,
+            )
+            suggestions_changed = dwell.set_target_context(
+                suggestion_context
+            )
+            mouth.set_target_context(suggestion_context)
+            if (
+                suggestions_changed
+                and isinstance(hovered_target, SuggestionTarget)
+            ):
+                hovered_target = None
+                hovered_suggestion_index = None
+                dwell_ratio = 0.0
+                hover_start_ts_ms = None
+                hover_start_key = None
+
             target = tester.target_text if tester.active else None
 
+            locked_suggestion_index = None
+            locked_keyboard_key = None
+            if mouth_mode:
+                if isinstance(mouth.locked_key, SuggestionTarget):
+                    locked_suggestion_index = mouth.locked_key.index
+                else:
+                    locked_keyboard_key = mouth.locked_key
+
             kbd_bg = draw_text_area(kbd_bg, current_text, target)
+            kbd_bg = draw_suggestion_boxes(
+                kbd_bg,
+                suggestion_state.slots,
+                suggestion_rects=suggestion_rects,
+                hovered_index=hovered_suggestion_index,
+                dwell_index=hovered_suggestion_index,
+                dwell_ratio=dwell_ratio,
+                show_cursor=show_cursor,
+                locked_index=locked_suggestion_index,
+            )
 
             # 테스트 완료 감지
             if tester.check_complete(current_text):
@@ -1472,6 +1019,8 @@ def main(
 
                 hangul.finalText = ""
                 hangul.jamo_buffer[:] = ['', '', '']
+                cheonjiin_composer.reset()
+                word_boundary_state.clear()
 
             if gaze_x < 0 or gaze_y < 0:
                 gaze_x = last_gaze_x
@@ -1483,9 +1032,10 @@ def main(
                 buttonList,
                 gaze_x,
                 gaze_y,
-                dwell.dwell_key,
+                hovered_key,
                 dwell_ratio,
-                show_cursor
+                show_cursor,
+                locked_key=locked_keyboard_key,
             )
 
             if tester.is_showing_complete():
@@ -1505,7 +1055,7 @@ def main(
                 ),
                 gaze_x=gaze_x,
                 gaze_y=gaze_y,
-                hovered_key=hovered_key,
+                hovered_key=target_log_id(hovered_target),
                 dwell_ratio=dwell_ratio,
                 clicked_key=clicked_key,
                 input_text_len=len(current_text),
@@ -1607,12 +1157,7 @@ def main(
                         2
                     )
 
-                    # ── 릿지/백본 상태 표시 ──
-                    if last_gaze_vec is not None:
-                        gaze_vec_text = f"GazeVec:({last_gaze_vec[0]:.1f},{last_gaze_vec[1]:.1f})"
-                    else:
-                        gaze_vec_text = "GazeVec:(None)"
-
+                    # ── 릿지 상태 표시 ──
                     ridge_sx, ridge_sy = (
                         (mapping_result.candidates.get("ridge_hybrid") or (None, None))
                         if mapping_result is not None else (None, None)
@@ -1620,8 +1165,6 @@ def main(
 
                     ridge_status_text = (
                         f"Ridge: {'FIT' if mapper.calibrator.ridge.fitted else 'NOT_FIT'} "
-                        f"Backbone: {'ON' if backbone.available else 'OFF'} "
-                        f"{gaze_vec_text} "
                         f"RidgeXY:({ridge_sx},{ridge_sy})"
                     )
 
@@ -1826,12 +1369,30 @@ def main(
                 print("show_cursor:", show_cursor)
 
             elif key == ord('m'):
+
+                # 입벌림 입력 모드 활성화
                 mouth_mode = True
+
+                # 개인별 MAR 캘리브레이션 초기화
+                # reset() 시 입 닫힘 측정 단계부터 다시 시작
                 mouth_calibrator.reset()
 
-                print("입벌림 캘리브레이션 시작")
+                # 이전 입벌림 판정 상태 초기화
+                mouth.reset()
+
+                # 기존 dwell 진행 상태 초기화
+                dwell.reset()
+
+                # 이전 hover 정보 초기화
+                hover_start_ts_ms = None
+                hover_start_key = None
+
+                print()
+                print("===== 입벌림 캘리브레이션 시작 =====")
+                print()
 
             elif key == ord('y'):
+                cheonjiin_composer.reset()
                 targeting_runner.start()
                 targeting_mode = True
 
@@ -1885,11 +1446,14 @@ def main(
                         screen_w=SCREEN_W,
                         screen_h=SCREEN_H,
                         monitor_diagonal_inch=MONITOR_DIAGONAL_INCH,
-                        # ridge_enabled/backbone_enabled: config 값이 아니라 이
-                        # 프로세스에서 선택 기능이 실제로 활성화됐는지(=필요한
-                        # 라이브러리를 import할 수 있었는지)를 담는다.
+                        # ridge_enabled: config 값이 아니라 이 프로세스에서 릿지가
+                        # 실제로 활성화됐는지(=sklearn을 import할 수 있었는지)를 담는다.
                         ridge_enabled=mapper.calibrator.ridge.sklearn_available(),
-                        backbone_enabled=backbone.available,
+                        # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
+                        # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
+                        backbone_enabled=False,
+                        git_commit=git_commit,
+                        condition_label=condition_label,
 
                         # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
                         calib_id=(
@@ -1922,6 +1486,7 @@ def main(
                         ),
                     )
 
+                    cheonjiin_composer.reset()
                     run_gaze_accuracy_test(
                         cap,
                         face_mesh,
@@ -1932,8 +1497,8 @@ def main(
                         use_pose_corrected,
                         use_sqpnp_corrected,
                         use_ridge=use_ridge,
-                        backbone=backbone
                     )
+                    cheonjiin_composer.reset()
 
                     last_test_id = collector.test_id
 
@@ -1969,7 +1534,11 @@ def main(
                     if hasattr(mapper, "calibrator")
                     else None
                 ),
-                backbone_enabled=backbone.available,
+                # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
+                # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
+                backbone_enabled=False,
+                git_commit=git_commit,
+                condition_label=condition_label,
             )
             # 9점 테스트가 없었던 실행이므로 __init__이 발급한 test_id는
             # 실제로 일어나지 않은 테스트를 가리키게 된다 — 결측으로 남긴다.
@@ -2003,6 +1572,7 @@ def main(
             if collector is not None and last_test_id is None:
                 last_test_id = collector.test_id
 
+    cheonjiin_composer.reset()
     session_logger.close()
     input_event_logger.close()
 
@@ -2014,104 +1584,21 @@ def main(
         show_session_popup(last_test_id)
 
 
-def _parse_args():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Look-Talk Eye Keyboard")
-
-    parser.add_argument(
-        "--gaze-mode",
-        dest="gaze_mode",
-        choices=list(AVAILABLE_MODES),
-        default=MODE_CALIBRATED,
-        help=(
-            "시선 매핑 모드. 'calibrated'(기본값)는 기존 16점 캘리브레이션을 "
-            "사용하고, 'no_calibration'은 캘리브레이션 화면 없이 바로 "
-            "키보드로 진입한다."
-        ),
-    )
-
-    parser.add_argument(
-        "--strategy",
-        dest="strategy",
-        default=None,
-        help=(
-            "no_calibration 모드에서 사용할 strategy 이름. 생략하면 "
-            f"기본값('{DEFAULT_NO_CALIBRATION_STRATEGY}')을 사용한다. "
-            f"사용 가능한 strategy: {', '.join(available_strategies()) or '(없음)'}"
-        ),
-    )
-
-    parser.add_argument(
-        "--keyboard-layout",
-        dest="keyboard_layout",
-        choices=[
-            KEYBOARD_LAYOUT_QWERTY,
-            KEYBOARD_LAYOUT_CHEONJIIN,
-        ],
-        default=KEYBOARD_LAYOUT_QWERTY,
-        help=(
-            "키보드 배열. 'qwerty'는 기존 쿼티 배열이며, "
-            "'cheonjiin'은 천지인 3×4 배열을 사용한다."
-        ),
-    )
-
-    parser.add_argument(
-        "--user-id",
-        dest="user_id",
-        default="yejin",
-        help=(
-            "sessions.csv 등에 기록될 참가자 식별자. 팀원별로 실행 결과를 "
-            "구분하려면 실행 시 지정한다(기본값은 기존 동작과 동일하게 "
-            "'yejin' 고정값을 유지)."
-        ),
-    )
-
-    parser.add_argument(
-        "--calib-points",
-        dest="calib_points",
-        type=int,
-        choices=[9, 16],
-        default=16,
-        help=(
-            "calibrated 모드에서 사용할 캘리브레이션 점 개수. "
-            "9 또는 16을 선택할 수 있으며 기본값은 16이다."
-        ),
-    )
-
-    args = parser.parse_args()
-
-    if args.gaze_mode == MODE_NO_CALIBRATION:
-        name = args.strategy or DEFAULT_NO_CALIBRATION_STRATEGY
-        if name not in available_strategies():
-            available = ", ".join(available_strategies()) or "(없음)"
-            parser.error(
-                f"'{name}'은(는) 등록된 no_calibration strategy가 아닙니다. "
-                f"사용 가능한 strategy: {available}"
-            )
-
-    return (
-        args.gaze_mode,
-        args.strategy,
-        args.keyboard_layout,
-        args.user_id,
-        args.calib_points
-    )
-
-
 if __name__ == "__main__":
     (
         _mode,
         _strategy_name,
         _keyboard_layout,
         _user_id,
+        _condition_label,
         _calib_points
-    ) = _parse_args()
+    ) = parse_args()
 
     main(
         mode=_mode,
         strategy_name=_strategy_name,
         keyboard_layout=_keyboard_layout,
         user_id=_user_id,
+        condition_label=_condition_label,
         calib_point_count=_calib_points
     )
