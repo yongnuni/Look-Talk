@@ -140,8 +140,14 @@ class CalibratedMapper(GazeMapper):
 
     VALID_METHODS = ("raw", "pose_corrected", "sqpnp_corrected", "ridge_hybrid")
 
-    def __init__(self, max_sqpnp_delta_px=MAX_SQPNP_DELTA_PX):
-        self._calibrator = Calibrator()
+    def __init__(
+        self,
+        max_sqpnp_delta_px=MAX_SQPNP_DELTA_PX,
+        calib_points=None,
+    ):
+        self._calibrator = Calibrator(
+            calib_points=calib_points
+        )
         self._active_method = "raw"
         self._max_sqpnp_delta_px = max_sqpnp_delta_px
 

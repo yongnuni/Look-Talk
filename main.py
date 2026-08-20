@@ -25,6 +25,8 @@ from src.config import (
     PX_PER_CM,
     GAZE_AVG_WINDOW,
     MONITOR_DIAGONAL_INCH,
+    CALIB_POINTS_16,
+    CALIB_POINTS_9,
 )
 
 from src.tracking.eye_tracking import (
@@ -697,7 +699,13 @@ def log_input_tap(
     )
 
 
-def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY,user_id="yejin"):
+def main(
+    mode=MODE_CALIBRATED,
+    strategy_name=None,
+    keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
+    user_id="yejin",
+    calib_point_count=16
+):
     # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
     clock.init()
@@ -734,12 +742,34 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
         cv2.WINDOW_FULLSCREEN
     )
 
-    mapper = create_mapper(mode, strategy_name)
+    # ── 캘리브레이션 점 개수 선택 ─────────────────────────────
+    if calib_point_count == 9:
+        selected_calib_points = CALIB_POINTS_9
 
-    # Calibrator는 mapper 내부(CalibratedMapper._calibrator)에서 생성되므로
-    # 생성자 인자로는 주입할 수 없다. calibrated_mapper.py의 `calibrator`
-    # property(외부 공개용 탈출구로 이미 문서화돼 있음)를 통해 run_id만
-    # 넘긴다 — no_calibration 모드는 calibrator 자체가 없으므로 hasattr로 가드.
+    elif calib_point_count == 16:
+        selected_calib_points = CALIB_POINTS_16
+
+    else:
+        raise ValueError(
+            f"지원하지 않는 캘리브레이션 점 개수: "
+            f"{calib_point_count}"
+        )
+
+    mapper = create_mapper(
+        mode,
+        strategy_name,
+        calib_points=selected_calib_points
+    )
+
+    if mode == MODE_CALIBRATED:
+        print(
+            f"[calibration] "
+            f"{len(selected_calib_points)}점 캘리브레이션 사용"
+        )
+
+    # Calibrator는 mapper 내부(CalibratedMapper._calibrator)에서 생성됨.
+    # factory → CalibratedMapper를 통해 calib_points를 전달하고,
+    # 여기서는 run_id만 추가로 설정한다.
     if hasattr(mapper, "calibrator"):
         mapper.calibrator.set_run_id(run_id)
 
@@ -2037,6 +2067,18 @@ def _parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--calib-points",
+        dest="calib_points",
+        type=int,
+        choices=[9, 16],
+        default=16,
+        help=(
+            "calibrated 모드에서 사용할 캘리브레이션 점 개수. "
+            "9 또는 16을 선택할 수 있으며 기본값은 16이다."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -2052,7 +2094,8 @@ def _parse_args():
         args.gaze_mode,
         args.strategy,
         args.keyboard_layout,
-        args.user_id
+        args.user_id,
+        args.calib_points
     )
 
 
@@ -2061,12 +2104,14 @@ if __name__ == "__main__":
         _mode,
         _strategy_name,
         _keyboard_layout,
-        _user_id
+        _user_id,
+        _calib_points
     ) = _parse_args()
 
     main(
         mode=_mode,
         strategy_name=_strategy_name,
         keyboard_layout=_keyboard_layout,
-        user_id=_user_id
+        user_id=_user_id,
+        calib_point_count=_calib_points
     )
