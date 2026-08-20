@@ -2,6 +2,7 @@ import cv2
 import time
 import numpy as np
 import os
+from functools import lru_cache
 
 from PIL import ImageFont, ImageDraw, Image
 from src.config import SCREEN_W, SCREEN_H, FIXATION_FRAMES
@@ -391,6 +392,237 @@ DWELL_BORDER_END = (29, 78, 216)
 PROGRESS_BAR_COLOR = (34, 197, 94)
 KEY_TEXT_COLOR = (30, 41, 59)
 KEY_TEXT_COLOR_DWELL = (255, 255, 255)
+
+
+_suggestion_measure_image = Image.new("RGB", (1, 1))
+_suggestion_measure_draw = ImageDraw.Draw(_suggestion_measure_image)
+
+
+@lru_cache(maxsize=64)
+def _suggestion_font(font_size):
+    return ImageFont.truetype(FONT_PATH, font_size)
+
+
+def _suggestion_text_size(text, text_font, spacing=0):
+    bbox = _suggestion_measure_draw.multiline_textbbox(
+        (0, 0),
+        text,
+        font=text_font,
+        spacing=spacing,
+        align="center",
+    )
+    return bbox, bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
+def _two_line_suggestion_variants(text):
+    variants = []
+    for split_at in range(1, len(text)):
+        first = text[:split_at].rstrip()
+        second = text[split_at:].lstrip()
+        if first and second:
+            variants.append(f"{first}\n{second}")
+    return variants
+
+
+def _ellipsize_suggestion(text, text_font, max_width):
+    ellipsis = "…"
+    low = 0
+    high = len(text)
+
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = text[:middle].rstrip() + ellipsis
+        _, text_width, _ = _suggestion_text_size(candidate, text_font)
+        if text_width <= max_width:
+            low = middle
+        else:
+            high = middle - 1
+
+    return text[:low].rstrip() + ellipsis
+
+
+@lru_cache(maxsize=256)
+def _fit_suggestion_text(text, rect_width, rect_height):
+    """박스에 맞는 표시 텍스트·폰트와 중앙 정렬용 측정값을 반환한다."""
+
+    padding_x = max(8, int(rect_width * 0.04))
+    padding_y = max(4, int(rect_height * 0.10))
+    max_width = max(1, rect_width - 2 * padding_x)
+    max_height = max(1, rect_height - 2 * padding_y)
+    preferred_size = max(18, int(rect_height * 0.30))
+    minimum_size = max(12, int(rect_height * 0.14))
+
+    # 한 줄 표시를 우선하며 최소 가독 크기까지 단계적으로 축소한다.
+    for font_size in range(preferred_size, minimum_size - 1, -1):
+        text_font = _suggestion_font(font_size)
+        bbox, text_width, text_height = _suggestion_text_size(text, text_font)
+        if text_width <= max_width and text_height <= max_height:
+            return text, text_font, bbox, text_width, text_height, 0
+
+    # 한 줄로 들어가지 않을 때만 최대 두 줄을 허용한다.
+    variants = _two_line_suggestion_variants(text)
+    for font_size in range(preferred_size, minimum_size - 1, -1):
+        text_font = _suggestion_font(font_size)
+        spacing = max(2, int(font_size * 0.15))
+        fitting_variants = []
+        for variant in variants:
+            bbox, text_width, text_height = _suggestion_text_size(
+                variant,
+                text_font,
+                spacing,
+            )
+            if text_width <= max_width and text_height <= max_height:
+                line_widths = [
+                    _suggestion_text_size(line, text_font)[1]
+                    for line in variant.splitlines()
+                ]
+                fitting_variants.append(
+                    (
+                        max(line_widths),
+                        abs(line_widths[0] - line_widths[1]),
+                        variant,
+                        bbox,
+                        text_width,
+                        text_height,
+                    )
+                )
+
+        if fitting_variants:
+            (
+                _,
+                _,
+                fitted_text,
+                bbox,
+                text_width,
+                text_height,
+            ) = min(fitting_variants)
+            return (
+                fitted_text,
+                text_font,
+                bbox,
+                text_width,
+                text_height,
+                spacing,
+            )
+
+    # 두 줄도 최소 크기에 들어가지 않을 때만 표시 문자열을 말줄임한다.
+    text_font = _suggestion_font(minimum_size)
+    fitted_text = _ellipsize_suggestion(text, text_font, max_width)
+    bbox, text_width, text_height = _suggestion_text_size(
+        fitted_text,
+        text_font,
+    )
+    return fitted_text, text_font, bbox, text_width, text_height, 0
+
+
+def draw_suggestion_boxes(
+    img,
+    suggestions,
+    suggestion_rects=None,
+    hovered_index=None,
+    dwell_index=None,
+    dwell_ratio=0.0,
+    show_cursor=True,
+    locked_index=None,
+):
+    """세 추천 박스와 내용이 있는 후보의 hover/선택 진행을 표시한다."""
+
+    rects = (
+        LAYOUT["suggestion_rects"]
+        if suggestion_rects is None
+        else suggestion_rects
+    )
+    img_pil = Image.fromarray(img)
+    draw = ImageDraw.Draw(img_pil)
+
+    for index, rect in enumerate(rects):
+        text = suggestions[index] if index < len(suggestions) else ""
+        on_suggestion = bool(text) and hovered_index == index
+        text_color = KEY_TEXT_COLOR
+
+        if text and locked_index == index:
+            bg_color = DWELL_BG_END
+            border_color = DWELL_BORDER_END
+            text_color = KEY_TEXT_COLOR_DWELL
+        elif (
+            on_suggestion
+            and dwell_index == index
+            and show_cursor
+        ):
+            ratio = max(0.0, min(1.0, dwell_ratio))
+            bg_color = tuple(
+                int(HOVER_BG[i] + (DWELL_BG_END[i] - HOVER_BG[i]) * ratio)
+                for i in range(3)
+            )
+            border_color = tuple(
+                int(
+                    HOVER_BORDER[i]
+                    + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * ratio
+                )
+                for i in range(3)
+            )
+            if ratio > 0.5:
+                text_color = KEY_TEXT_COLOR_DWELL
+        elif on_suggestion and show_cursor:
+            bg_color = HOVER_BG
+            border_color = HOVER_BORDER
+        elif on_suggestion and not show_cursor:
+            bg_color = (255, 235, 0)
+            border_color = (255, 120, 0)
+        else:
+            bg_color = IDLE_BG
+            border_color = IDLE_BORDER
+
+        radius = int(min(rect.width, rect.height) * 0.18)
+        draw.rounded_rectangle(
+            rect.pillow_bbox(),
+            radius=radius,
+            fill=bg_color,
+            outline=border_color,
+            width=2,
+        )
+
+        if not text:
+            continue
+
+        if (
+            on_suggestion
+            and dwell_index == index
+            and dwell_ratio > 0
+        ):
+            bar_width = int(rect.width * min(1.0, dwell_ratio))
+            bar_right = rect.x + max(1, min(rect.width, bar_width)) - 1
+            draw.rounded_rectangle(
+                [
+                    rect.x,
+                    rect.bottom - 6,
+                    bar_right,
+                    rect.bottom - 1,
+                ],
+                radius=3,
+                fill=PROGRESS_BAR_COLOR,
+            )
+
+        (
+            display_text,
+            text_font,
+            bbox,
+            text_width,
+            text_height,
+            spacing,
+        ) = _fit_suggestion_text(text, rect.width, rect.height)
+        text_x = rect.x + (rect.width - text_width) // 2 - bbox[0]
+        text_y = rect.y + (rect.height - text_height) // 2 - bbox[1]
+        draw.multiline_text(
+            (text_x, text_y),
+            display_text,
+            font=text_font,
+            fill=text_color,
+            spacing=spacing,
+            align="center",
+        )
+
+    return np.array(img_pil)
 
 
 def drawAll(

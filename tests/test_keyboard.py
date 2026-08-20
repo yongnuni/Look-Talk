@@ -359,4 +359,4 @@ def test_cheonjiin_backspace_label_uses_correct_wording_only_in_that_layout():
     assert cheonjiin_delete.text == "Del"
     assert cheonjiin_delete.display_label == "되돌리기"
     assert qwerty_delete.display_label is None
-    assert DISPLAY_LABELS["Del"] == "뒤돌리기"
+    assert DISPLAY_LABELS["Del"] == "되돌리기"

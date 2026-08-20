@@ -7,9 +7,11 @@ from src.keyboard import (
     KEYBOARD_LAYOUT_QWERTY,
     calculate_cheonjiin_layout,
     calculate_keyboard_layout,
+    calculate_suggestion_rects,
     create_buttons,
     create_cheonjiin_buttons,
     hit_test_buttons,
+    hit_test_suggestions,
     keys_kor_normal,
 )
 from src.tracking.dwell import DwellController
@@ -163,3 +165,68 @@ def test_dwell_uses_exact_shared_hitbox(layout_name):
         buttons,
     )
     assert (hovered_key, dwell_ratio, clicked_key) == (None, 0.0, None)
+
+
+@pytest.mark.parametrize(
+    ("screen_w", "screen_h", "expected"),
+    [
+        (
+            1280,
+            720,
+            (
+                (51, 88, 388, 79),
+                (446, 88, 388, 79),
+                (841, 88, 388, 79),
+            ),
+        ),
+        (
+            1920,
+            1080,
+            (
+                (76, 120, 582, 118),
+                (669, 120, 582, 118),
+                (1262, 120, 582, 118),
+            ),
+        ),
+    ],
+)
+def test_suggestion_rects_match_reserved_layout(screen_w, screen_h, expected):
+    qwerty = calculate_keyboard_layout(screen_w, screen_h)
+    cheonjiin = calculate_cheonjiin_layout(screen_w, screen_h)
+    actual = tuple(
+        (rect.x, rect.y, rect.width, rect.height)
+        for rect in qwerty["suggestion_rects"]
+    )
+
+    assert actual == expected
+    assert cheonjiin["suggestion_rects"] == qwerty["suggestion_rects"]
+
+
+def test_suggestion_remainder_pixels_are_distributed_from_the_front():
+    rects = calculate_suggestion_rects((0, 0, 10, 5), key_gap_x=1)
+
+    assert tuple((rect.x, rect.width) for rect in rects) == (
+        (0, 3),
+        (4, 3),
+        (8, 2),
+    )
+
+
+def test_suggestion_hitboxes_are_independent_from_keyboard_buttons():
+    layout = calculate_keyboard_layout(1920, 1080)
+    suggestion_rects = layout["suggestion_rects"]
+    buttons = create_buttons(keys_kor_normal, layout)
+
+    for index, rect in enumerate(suggestion_rects):
+        assert hit_test_suggestions(suggestion_rects, *rect.center) == index
+        assert hit_test_buttons(buttons, *rect.center) is None
+
+    for button in buttons:
+        assert hit_test_suggestions(
+            suggestion_rects,
+            *button.rect.center,
+        ) is None
+
+    left, middle, _ = suggestion_rects
+    gap_x = (left.right + middle.x) / 2
+    assert hit_test_suggestions(suggestion_rects, gap_x, left.center[1]) is None
