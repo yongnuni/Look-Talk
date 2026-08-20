@@ -73,6 +73,18 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--calib-points",
+        dest="calib_points",
+        type=int,
+        choices=[9, 16],
+        default=16,
+        help=(
+            "calibrated 모드에서 사용할 캘리브레이션 점 개수. "
+            "9 또는 16을 선택할 수 있으며 기본값은 16이다."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -89,5 +101,6 @@ def parse_args():
         args.strategy,
         args.keyboard_layout,
         args.user_id,
-        args.condition_label
+        args.condition_label,
+        args.calib_points
     )

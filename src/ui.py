@@ -266,11 +266,11 @@ def draw_calib_screen(
     for i in range(calib.idx):
 
         px = int(
-            CALIB_POINTS[i][0] * sw
+            calib.calib_points[i][0] * sw
         )
 
         py = int(
-            CALIB_POINTS[i][1] * sh
+            calib.calib_points[i][1] * sh
         )
 
         cv2.circle(
@@ -291,14 +291,14 @@ def draw_calib_screen(
             1
         )
 
-    if calib.idx < len(CALIB_POINTS):
+    if calib.idx < len(calib.calib_points):
 
         tx = int(
-            CALIB_POINTS[calib.idx][0] * sw
+            calib.calib_points[calib.idx][0] * sw
         )
 
         ty = int(
-            CALIB_POINTS[calib.idx][1] * sh
+            calib.calib_points[calib.idx][1] * sh
         )
 
         cv2.circle(

@@ -18,14 +18,24 @@ AVAILABLE_MODES = (MODE_CALIBRATED, MODE_NO_CALIBRATION)
 DEFAULT_NO_CALIBRATION_STRATEGY = "head_pose_relative_iris"
 
 
-def create_mapper(mode=MODE_CALIBRATED, strategy_name=None):
+def create_mapper(
+    mode=MODE_CALIBRATED,
+    strategy_name=None,
+    calib_points=None
+):
     """
     mode:
         "calibrated" | "no_calibration"
+
     strategy_name:
         no_calibration 모드에서 사용할 strategy 이름.
         생략하면 DEFAULT_NO_CALIBRATION_STRATEGY를 사용한다.
         calibrated 모드에서는 무시된다.
+
+    calib_points:
+        calibrated 모드에서 사용할 캘리브레이션 점 목록.
+        None이면 CalibratedMapper 내부 기본값인 16점 캘리브레이션을 사용한다.
+        no_calibration 모드에서는 무시된다.
 
     등록된 strategy가 없는데 no_calibration을 요청하면 여기서 명확한
     예외로 막는다(NoCalibrationMapper가 "일단 실행되는 것처럼" 보이는
@@ -34,7 +44,9 @@ def create_mapper(mode=MODE_CALIBRATED, strategy_name=None):
     """
 
     if mode == MODE_CALIBRATED:
-        return CalibratedMapper()
+        return CalibratedMapper(
+            calib_points=calib_points
+        )
 
     if mode == MODE_NO_CALIBRATION:
         name = strategy_name or DEFAULT_NO_CALIBRATION_STRATEGY
