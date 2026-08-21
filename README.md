@@ -131,8 +131,12 @@ Look-Talk/
     │
     ├── tracking/
     │   ├── calibration.py                    # 16점 홈그래피 학습 + 릿지 회귀 하이브리드 매핑
-    │   ├── dwell.py                          # 시선 dwell 클릭 판정
+    │   ├── dwell.py                          # 시선 dwell 클릭 판정 (키·추천 공용 update_target, 고정 확장 적용 지점)
     │   ├── eye_tracking.py                   # 홍채 좌표 계산, 눈 깜빡임(EAR) 검출
+    │   ├── fixation.py                       # 고정 감지형 히트박스 확장 (I-VT 속도 + I-DT 분산)
+    │   │                                     #   고정된 키캡·추천 슬롯의 판정 영역을 넓히고 화면에서도 확대
+    │   │                                     #   이웃을 최대 1/3까지 덮고, 겹치는 구간에서는 확장된 쪽이 우선
+    │   │                                     #   주변 대상의 위치·크기는 정적으로 유지(반응형 재배치 없음)
     │   ├── gaze_pipeline.py                  # Kalman 스무딩 + fixation 감지
     │   ├── head_pose.py                      # solvePnP/SQPnP 기반 head pose 추정
     │   ├── mouth.py                          # 입벌림 비율(MAR) 계산, 입벌림 클릭 판정
@@ -170,7 +174,9 @@ Look-Talk/
     │
     ├── analysis/                             # 세션/캘리브레이션 진단 배터리, Notion 업로드 등 수동 실행 진단 도구
     │
-    └── recommendation/                       # 전부 빈 파일 (미구현 스텁)
+    └── recommendation/                       # 병원 특화 초성 자동완성 (사전/Trie/추천 상태)
+        └── selection.py                      # 추천 슬롯과 키 중 프레임당 입력 대상 1개 결정
+                                              #   고정 확장을 넘기면 추천·키 양쪽에 같은 규칙으로 적용
 
 tests/
 ├── test_runner.py                            # TestRunner: 문장 입력 테스트 진행 상태 관리

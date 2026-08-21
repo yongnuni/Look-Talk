@@ -99,7 +99,9 @@ from src.recommendation import (
     initialize_recommender,
 )
 from src.recommendation.selection import (
+    SuggestionSlot,
     SuggestionTarget,
+    build_fixation_targets,
     resolve_input_target,
     target_log_id,
 )
@@ -728,6 +730,20 @@ def main(
             # ── 입력 방식 처리 ─────────────────────────────────
 
             if tracking_valid:
+                # 이번 프레임의 선택 대상 전체(내용 있는 추천 + 키). 고정
+                # 갱신과 hit-test가 같은 목록을 봐야 확장 한도(서로 1/3)가
+                # 양쪽에 일관되게 걸린다.
+                fixation_targets = build_fixation_targets(
+                    suggestion_rects,
+                    suggestion_state.slots,
+                    buttonList,
+                )
+
+                # 고정 감지형 확장 — hit-test 전에 이번 프레임의 고정 상태를
+                # 먼저 갱신한다. dwell/깜빡임/입벌림 어느 트리거든 아래
+                # hit-test 결과를 그대로 쓰므로 여기 한 번이면 된다.
+                dwell.update_fixation(gaze_x, gaze_y, fixation_targets)
+
                 # 추천 hitbox는 buttonList와 분리한 채, 현재 프레임의 추천/키
                 # 중 하나만 공통 선택 대상으로 만든다.
                 hovered_target = resolve_input_target(
@@ -736,6 +752,8 @@ def main(
                     buttonList,
                     gaze_x,
                     gaze_y,
+                    fixation_hitbox=dwell.fixation_hitbox,
+                    fixation_targets=fixation_targets,
                 )
                 if isinstance(hovered_target, SuggestionTarget):
                     hovered_suggestion_index = hovered_target.index
@@ -783,6 +801,14 @@ def main(
 
                 dwell.reset()
                 mouth.reset()
+
+                # 추적이 끊긴 프레임은 고정으로 이어 붙이지 않는다.
+                dwell.update_fixation(
+                    gaze_x,
+                    gaze_y,
+                    (),
+                    valid=False,
+                )
 
                 hovered_target = None
                 hovered_key = None
@@ -949,17 +975,43 @@ def main(
                 else:
                     locked_keyboard_key = mouth.locked_key
 
-            kbd_bg = draw_text_area(kbd_bg, current_text, target)
-            kbd_bg = draw_suggestion_boxes(
-                kbd_bg,
-                suggestion_state.slots,
+            # ── 고정 감지로 확대할 대상 ──────────────────────
+            # 추천 슬롯과 키캡이 같은 레이어를 쓰므로, 어느 쪽이 확대됐는지에
+            # 따라 그리는 순서를 바꿔 확대된 쪽이 항상 맨 위에 오게 한다.
+            anchor_target = dwell.fixation_hitbox.anchor_target
+            anchor_visual_rect = dwell.fixation_hitbox.anchor_visual_rect()
+
+            expanded_suggestion_index = None
+            expanded_suggestion_rect = None
+            expanded_button = None
+            expanded_button_rect = None
+
+            if anchor_visual_rect is not None:
+                if isinstance(anchor_target, SuggestionSlot):
+                    expanded_suggestion_index = anchor_target.index
+                    expanded_suggestion_rect = anchor_visual_rect
+                else:
+                    expanded_button = anchor_target
+                    expanded_button_rect = anchor_visual_rect
+
+            suggestion_layer = dict(
+                suggestions=suggestion_state.slots,
                 suggestion_rects=suggestion_rects,
                 hovered_index=hovered_suggestion_index,
                 dwell_index=hovered_suggestion_index,
                 dwell_ratio=dwell_ratio,
                 show_cursor=show_cursor,
                 locked_index=locked_suggestion_index,
+                expanded_index=expanded_suggestion_index,
+                expanded_rect=expanded_suggestion_rect,
             )
+
+            kbd_bg = draw_text_area(kbd_bg, current_text, target)
+
+            # 추천이 확대된 프레임에서는 키보드를 먼저 그리고 추천을 그 위에
+            # 얹는다(아래 drawAll 뒤).
+            if expanded_suggestion_index is None:
+                kbd_bg = draw_suggestion_boxes(kbd_bg, **suggestion_layer)
 
             # 테스트 완료 감지
             if tester.check_complete(current_text):
@@ -1036,7 +1088,16 @@ def main(
                 dwell_ratio,
                 show_cursor,
                 locked_key=locked_keyboard_key,
+
+                # 고정 감지로 확대해 그릴 키. 판정(히트박스)은 이보다 조금 더
+                # 넓고, 나머지 키의 위치·크기는 그대로 유지된다.
+                expanded_button=expanded_button,
+                expanded_rect=expanded_button_rect,
             )
+
+            # 추천이 확대된 프레임은 키보드 위에 추천을 마지막으로 얹는다.
+            if expanded_suggestion_index is not None:
+                kbd_bg = draw_suggestion_boxes(kbd_bg, **suggestion_layer)
 
             if tester.is_showing_complete():
                 kbd_bg = draw_test_complete_overlay(kbd_bg)
@@ -1077,6 +1138,48 @@ def main(
                     (255, 100, 0),
                     2
                 )
+
+                # ── 고정 감지형 히트박스 확장 상태 ──
+                # 판정 영역만 넓히는 기능이라 평소 화면에는 아무 표시도 하지
+                # 않는다. 임계값 튜닝을 위해 'd' 오버레이에서만 확장 사각형과
+                # 속도/지속시간을 보여준다.
+                fixation_state = dwell.fixation_state
+
+                fixation_text = (
+                    f"Fixation: {'ON' if dwell.fixation_hitbox.active else 'off'} "
+                    f"key={dwell.fixation_hitbox.anchor_key} "
+                    f"dur={fixation_state.duration_sec:.2f}s "
+                    + (
+                        f"v={fixation_state.velocity_deg_per_sec:.1f}deg/s"
+                        if fixation_state.velocity_deg_per_sec is not None
+                        else "v=N/A"
+                    )
+                )
+
+                cv2.putText(
+                    kbd_bg,
+                    fixation_text,
+                    (30, SCREEN_H - 300),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (
+                        (0, 255, 0)
+                        if dwell.fixation_hitbox.active
+                        else (255, 255, 255)
+                    ),
+                    2
+                )
+
+                debug_rect = dwell.fixation_hitbox.anchor_debug_rect()
+
+                if debug_rect is not None:
+                    cv2.rectangle(
+                        kbd_bg,
+                        (debug_rect[0], debug_rect[1]),
+                        (debug_rect[2], debug_rect[3]),
+                        (0, 255, 0),
+                        2
+                    )
 
                 pose_text = (
                     f"Valid:{head_pose['valid']} "

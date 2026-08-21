@@ -45,15 +45,24 @@ small_font = ImageFont.truetype(
 )
 
 # 키캡 텍스트는 최종 확정된 row_h에 비례해 크기를 맞춘다(해상도별 자동 조정).
-key_font = ImageFont.truetype(
-    FONT_PATH,
-    max(18, int(LAYOUT["row_h"] * 0.42))
-)
+KEY_FONT_SIZE = max(18, int(LAYOUT["row_h"] * 0.42))
+FUNCTION_KEY_FONT_SIZE = max(20, int(LAYOUT["row_h"] * 0.30))
 
-function_key_font = ImageFont.truetype(
-    FONT_PATH,
-    max(20, int(LAYOUT["row_h"] * 0.30))
-)
+key_font = ImageFont.truetype(FONT_PATH, KEY_FONT_SIZE)
+function_key_font = ImageFont.truetype(FONT_PATH, FUNCTION_KEY_FONT_SIZE)
+
+# 고정 감지로 확대된 키캡은 글자도 같은 비율로 커진다. 매 프레임 폰트를
+# 새로 여는 비용을 피하려고 크기별로 한 번만 만들어 캐시한다.
+_scaled_key_fonts = {}
+
+
+def _key_font_for(base_size, scale):
+    size = max(12, int(round(base_size * scale)))
+
+    if size not in _scaled_key_fonts:
+        _scaled_key_fonts[size] = ImageFont.truetype(FONT_PATH, size)
+
+    return _scaled_key_fonts[size]
 
 
 # ── 카운트다운 ────────────────────────────────────────────────
@@ -394,6 +403,146 @@ KEY_TEXT_COLOR = (30, 41, 59)
 KEY_TEXT_COLOR_DWELL = (255, 255, 255)
 
 
+def _draw_key(
+    draw,
+    button,
+    box,
+    dwell_key,
+    dwell_ratio,
+    show_cursor,
+    locked_key=None,
+    font_scale=1.0,
+):
+    """키캡 하나를 그린다.
+
+    box는 실제로 그릴 사각형 (x, y, right, bottom)이다. 고정 감지로 확대된
+    키만 자기 rect보다 큰 box를 받고, 나머지 키는 rect 그대로를 받는다.
+    """
+
+    key = button.text
+
+    nx = int(box[0])
+    ny = int(box[1])
+    nw = int(box[2]) - nx
+    nh = int(box[3]) - ny
+
+    # hover 여부는 좌표를 다시 검사하지 않고 판정 결과(dwell_key)를 그대로
+    # 따른다. 고정 확장으로 실제 사각형 밖에서 hover가 잡힌 경우에도
+    # 화면 표시와 판정이 어긋나지 않는다.
+    on_key = dwell_key is not None and key == dwell_key
+
+    text_color = KEY_TEXT_COLOR
+
+    # 입벌림 모드에서 잠긴 키
+    if locked_key is not None and key == locked_key:
+
+        bg_color = DWELL_BG_END
+        border_color = DWELL_BORDER_END
+        text_color = KEY_TEXT_COLOR_DWELL
+
+    # 바라보고 있는 키 (dwell_ratio가 0이면 hover 색 그대로)
+    elif on_key and show_cursor:
+
+        t = dwell_ratio
+
+        bg_color = tuple(
+            int(
+                HOVER_BG[i]
+                + (DWELL_BG_END[i] - HOVER_BG[i]) * t
+            )
+            for i in range(3)
+        )
+
+        border_color = tuple(
+            int(
+                HOVER_BORDER[i]
+                + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * t
+            )
+            for i in range(3)
+        )
+
+        if t > 0.5:
+            text_color = KEY_TEXT_COLOR_DWELL
+
+    # 커서 숨김 모드
+    elif on_key and not show_cursor:
+
+        bg_color = (255, 235, 0)
+        border_color = (255, 120, 0)
+
+    else:
+
+        bg_color = IDLE_BG
+        border_color = IDLE_BORDER
+
+    radius = int(min(nw, nh) * 0.18)
+
+    if on_key and not show_cursor:
+
+        draw.rounded_rectangle(
+            [nx - 5, ny - 5, nx + nw + 5, ny + nh + 5],
+            radius=radius + 5,
+            outline=(255, 255, 0),
+            width=6
+        )
+
+    draw.rounded_rectangle(
+        [nx, ny, nx + nw - 1, ny + nh - 1],
+        radius=radius,
+        fill=bg_color,
+        outline=border_color,
+        width=2
+    )
+
+    if on_key and dwell_ratio > 0:
+
+        bar_w = int(nw * dwell_ratio)
+        bar_right = nx + max(1, min(nw, bar_w)) - 1
+
+        draw.rounded_rectangle(
+            [
+                nx,
+                ny + nh - 6,
+                bar_right,
+                ny + nh - 1
+            ],
+            radius=3,
+            fill=PROGRESS_BAR_COLOR
+        )
+
+    label = (
+        button.display_label
+        or DISPLAY_LABELS.get(key, key)
+    )
+
+    base_font_size = (
+        FUNCTION_KEY_FONT_SIZE
+        if getattr(button, "font_role", "default") == "function_small"
+        else KEY_FONT_SIZE
+    )
+
+    current_key_font = _key_font_for(base_font_size, font_scale)
+
+    bbox = draw.textbbox(
+        (0, 0),
+        label,
+        font=current_key_font
+    )
+
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    text_x = nx + (nw - text_w) // 2 - bbox[0]
+    text_y = ny + (nh - text_h) // 2 - bbox[1]
+
+    draw.text(
+        (text_x, text_y),
+        label,
+        font=current_key_font,
+        fill=text_color
+    )
+
+
 _suggestion_measure_image = Image.new("RGB", (1, 1))
 _suggestion_measure_draw = ImageDraw.Draw(_suggestion_measure_image)
 
@@ -515,6 +664,114 @@ def _fit_suggestion_text(text, rect_width, rect_height):
     return fitted_text, text_font, bbox, text_width, text_height, 0
 
 
+def _draw_suggestion(
+    draw,
+    box,
+    text,
+    index,
+    hovered_index,
+    dwell_index,
+    dwell_ratio,
+    show_cursor,
+    locked_index,
+):
+    """추천 슬롯 하나를 그린다.
+
+    box는 실제로 그릴 사각형 (x, y, right, bottom)이다. 고정 감지로 확대된
+    슬롯만 자기 rect보다 큰 box를 받는다 — 나머지 슬롯의 위치·크기는 그대로다.
+    """
+
+    box_x = int(box[0])
+    box_y = int(box[1])
+    box_width = int(box[2]) - box_x
+    box_height = int(box[3]) - box_y
+
+    on_suggestion = bool(text) and hovered_index == index
+    text_color = KEY_TEXT_COLOR
+
+    if text and locked_index == index:
+        bg_color = DWELL_BG_END
+        border_color = DWELL_BORDER_END
+        text_color = KEY_TEXT_COLOR_DWELL
+    elif (
+        on_suggestion
+        and dwell_index == index
+        and show_cursor
+    ):
+        ratio = max(0.0, min(1.0, dwell_ratio))
+        bg_color = tuple(
+            int(HOVER_BG[i] + (DWELL_BG_END[i] - HOVER_BG[i]) * ratio)
+            for i in range(3)
+        )
+        border_color = tuple(
+            int(
+                HOVER_BORDER[i]
+                + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * ratio
+            )
+            for i in range(3)
+        )
+        if ratio > 0.5:
+            text_color = KEY_TEXT_COLOR_DWELL
+    elif on_suggestion and show_cursor:
+        bg_color = HOVER_BG
+        border_color = HOVER_BORDER
+    elif on_suggestion and not show_cursor:
+        bg_color = (255, 235, 0)
+        border_color = (255, 120, 0)
+    else:
+        bg_color = IDLE_BG
+        border_color = IDLE_BORDER
+
+    radius = int(min(box_width, box_height) * 0.18)
+    draw.rounded_rectangle(
+        [box_x, box_y, box_x + box_width - 1, box_y + box_height - 1],
+        radius=radius,
+        fill=bg_color,
+        outline=border_color,
+        width=2,
+    )
+
+    if not text:
+        return
+
+    if (
+        on_suggestion
+        and dwell_index == index
+        and dwell_ratio > 0
+    ):
+        bar_width = int(box_width * min(1.0, dwell_ratio))
+        bar_right = box_x + max(1, min(box_width, bar_width)) - 1
+        draw.rounded_rectangle(
+            [
+                box_x,
+                box_y + box_height - 6,
+                bar_right,
+                box_y + box_height - 1,
+            ],
+            radius=3,
+            fill=PROGRESS_BAR_COLOR,
+        )
+
+    (
+        display_text,
+        text_font,
+        bbox,
+        text_width,
+        text_height,
+        spacing,
+    ) = _fit_suggestion_text(text, box_width, box_height)
+    text_x = box_x + (box_width - text_width) // 2 - bbox[0]
+    text_y = box_y + (box_height - text_height) // 2 - bbox[1]
+    draw.multiline_text(
+        (text_x, text_y),
+        display_text,
+        font=text_font,
+        fill=text_color,
+        spacing=spacing,
+        align="center",
+    )
+
+
 def draw_suggestion_boxes(
     img,
     suggestions,
@@ -524,8 +781,15 @@ def draw_suggestion_boxes(
     dwell_ratio=0.0,
     show_cursor=True,
     locked_index=None,
+    expanded_index=None,
+    expanded_rect=None,
 ):
-    """세 추천 박스와 내용이 있는 후보의 hover/선택 진행을 표시한다."""
+    """세 추천 박스와 내용이 있는 후보의 hover/선택 진행을 표시한다.
+
+    expanded_index/expanded_rect가 주어지면(고정 감지로 확대된 추천) 그 슬롯만
+    나머지를 그린 뒤 맨 위에 덮어 그린다. 다른 슬롯의 위치·크기는 그대로다 —
+    키캡과 같은 규칙이다.
+    """
 
     rects = (
         LAYOUT["suggestion_rects"]
@@ -535,91 +799,45 @@ def draw_suggestion_boxes(
     img_pil = Image.fromarray(img)
     draw = ImageDraw.Draw(img_pil)
 
+    expand_index = (
+        expanded_index
+        if expanded_rect is not None
+        else None
+    )
+
     for index, rect in enumerate(rects):
-        text = suggestions[index] if index < len(suggestions) else ""
-        on_suggestion = bool(text) and hovered_index == index
-        text_color = KEY_TEXT_COLOR
 
-        if text and locked_index == index:
-            bg_color = DWELL_BG_END
-            border_color = DWELL_BORDER_END
-            text_color = KEY_TEXT_COLOR_DWELL
-        elif (
-            on_suggestion
-            and dwell_index == index
-            and show_cursor
-        ):
-            ratio = max(0.0, min(1.0, dwell_ratio))
-            bg_color = tuple(
-                int(HOVER_BG[i] + (DWELL_BG_END[i] - HOVER_BG[i]) * ratio)
-                for i in range(3)
-            )
-            border_color = tuple(
-                int(
-                    HOVER_BORDER[i]
-                    + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * ratio
-                )
-                for i in range(3)
-            )
-            if ratio > 0.5:
-                text_color = KEY_TEXT_COLOR_DWELL
-        elif on_suggestion and show_cursor:
-            bg_color = HOVER_BG
-            border_color = HOVER_BORDER
-        elif on_suggestion and not show_cursor:
-            bg_color = (255, 235, 0)
-            border_color = (255, 120, 0)
-        else:
-            bg_color = IDLE_BG
-            border_color = IDLE_BORDER
-
-        radius = int(min(rect.width, rect.height) * 0.18)
-        draw.rounded_rectangle(
-            rect.pillow_bbox(),
-            radius=radius,
-            fill=bg_color,
-            outline=border_color,
-            width=2,
-        )
-
-        if not text:
+        if index == expand_index:
             continue
 
-        if (
-            on_suggestion
-            and dwell_index == index
-            and dwell_ratio > 0
-        ):
-            bar_width = int(rect.width * min(1.0, dwell_ratio))
-            bar_right = rect.x + max(1, min(rect.width, bar_width)) - 1
-            draw.rounded_rectangle(
-                [
-                    rect.x,
-                    rect.bottom - 6,
-                    bar_right,
-                    rect.bottom - 1,
-                ],
-                radius=3,
-                fill=PROGRESS_BAR_COLOR,
-            )
+        _draw_suggestion(
+            draw,
+            (rect.x, rect.y, rect.right, rect.bottom),
+            suggestions[index] if index < len(suggestions) else "",
+            index,
+            hovered_index,
+            dwell_index,
+            dwell_ratio,
+            show_cursor,
+            locked_index,
+        )
 
-        (
-            display_text,
-            text_font,
-            bbox,
-            text_width,
-            text_height,
-            spacing,
-        ) = _fit_suggestion_text(text, rect.width, rect.height)
-        text_x = rect.x + (rect.width - text_width) // 2 - bbox[0]
-        text_y = rect.y + (rect.height - text_height) // 2 - bbox[1]
-        draw.multiline_text(
-            (text_x, text_y),
-            display_text,
-            font=text_font,
-            fill=text_color,
-            spacing=spacing,
-            align="center",
+    if expand_index is not None and expand_index < len(rects):
+
+        _draw_suggestion(
+            draw,
+            expanded_rect,
+            (
+                suggestions[expand_index]
+                if expand_index < len(suggestions)
+                else ""
+            ),
+            expand_index,
+            hovered_index,
+            dwell_index,
+            dwell_ratio,
+            show_cursor,
+            locked_index,
         )
 
     return np.array(img_pil)
@@ -633,162 +851,76 @@ def drawAll(
     dwell_key,
     dwell_ratio,
     show_cursor,
-    locked_key=None
+    locked_key=None,
+    expanded_button=None,
+    expanded_rect=None
 ):
+    """키보드 렌더링.
+
+    expanded_button/expanded_rect가 주어지면(고정 감지로 확대된 키) 그 키만
+    나머지를 전부 그린 뒤 맨 위에 덮어 그린다. 다른 키의 위치와 크기는 전혀
+    바뀌지 않는다 — 레이아웃은 정적이고, 확대된 키가 이웃 위에 겹쳐 보일
+    뿐이다.
+
+    gaze_x/gaze_y는 호출부 호환을 위해 남겨 둔 인자다. hover 표시는 좌표를
+    다시 검사하지 않고 판정 결과(dwell_key)를 그대로 따른다 — 확장된 히트박스
+    로 잡힌 hover도 화면에 그대로 반영되어야 하기 때문이다.
+    """
 
     img_pil = Image.fromarray(img)
 
     draw = ImageDraw.Draw(img_pil)
 
+    expand_target = (
+        expanded_button
+        if expanded_rect is not None
+        else None
+    )
+
+    expand_target_drawn = False
+
     for button in buttonList:
 
+        if button is expand_target:
+            expand_target_drawn = True
+            continue
+
         rect = button.rect
-        x, y = rect.x, rect.y
-        w, h = rect.width, rect.height
 
-        key = button.text
-
-        on_key = rect.contains(gaze_x, gaze_y)
-
-        # 기본 크기
-        nx = x
-        ny = y
-        nw = w
-        nh = h
-
-        text_color = KEY_TEXT_COLOR
-
-        # =================================================
-        # 입벌림 모드에서 잠긴 키
-        # =================================================
-        if locked_key is not None and key == locked_key:
-
-            # 잠금된 키는 진한 파란색으로 표시
-            bg_color = DWELL_BG_END
-            border_color = DWELL_BORDER_END
-            text_color = KEY_TEXT_COLOR_DWELL
-
-        # =================================================
-        # 시선 Dwell 진행 중인 키
-        # =================================================
-        elif on_key and dwell_key == key and show_cursor:
-
-            t = dwell_ratio
-
-            bg_color = tuple(
-                int(
-                    HOVER_BG[i]
-                    + (DWELL_BG_END[i] - HOVER_BG[i]) * t
-                )
-                for i in range(3)
-            )
-
-            border_color = tuple(
-                int(
-                    HOVER_BORDER[i]
-                    + (DWELL_BORDER_END[i] - HOVER_BORDER[i]) * t
-                )
-                for i in range(3)
-            )
-
-            if t > 0.5:
-                text_color = KEY_TEXT_COLOR_DWELL
-
-        # =================================================
-        # 현재 바라보고 있는 키
-        # =================================================
-        elif on_key and show_cursor:
-
-            bg_color = HOVER_BG
-            border_color = HOVER_BORDER
-
-        # =================================================
-        # 커서 숨김 모드
-        # =================================================
-        elif on_key and not show_cursor:
-
-            bg_color = (255, 235, 0)
-            border_color = (255, 120, 0)
-
-        else:
-
-            bg_color = IDLE_BG
-            border_color = IDLE_BORDER
-
-        radius = int(min(w, h) * 0.18)
-
-        if on_key and not show_cursor:
-
-            draw.rounded_rectangle(
-                [nx-5, ny-5, nx+nw+5, ny+nh+5],
-                radius=radius+5,
-                outline=(255,255,0),
-                width=6
-            )
-
-        draw.rounded_rectangle(
-            rect.pillow_bbox(),
-            radius=radius,
-            fill=bg_color,
-            outline=border_color,
-            width=2
+        _draw_key(
+            draw,
+            button,
+            (rect.x, rect.y, rect.right, rect.bottom),
+            dwell_key,
+            dwell_ratio,
+            show_cursor,
+            locked_key,
         )
 
-        if (
-            on_key
-            and
-            dwell_key == key
-            and
-            dwell_ratio > 0
-        ):
+    if expand_target_drawn:
 
-            bar_w = int(
-                w * dwell_ratio
-            )
-            bar_right = nx + max(1, min(nw, bar_w)) - 1
+        rect = expand_target.rect
 
-            draw.rounded_rectangle(
-                [
-                    nx,
-                    ny+nh-6,
-                    bar_right,
-                    ny+nh-1
-                ],
-                radius=3,
-                fill=PROGRESS_BAR_COLOR
-            )
-
-        label = (
-            button.display_label
-            or DISPLAY_LABELS.get(key, key)
+        # 글자도 키캡과 같은 비율로 키운다. 가로/세로 확대율이 다르면
+        # 작은 쪽을 따라가 글자가 키 밖으로 넘치지 않게 한다.
+        font_scale = min(
+            (expanded_rect[2] - expanded_rect[0]) / max(1, rect.width),
+            (expanded_rect[3] - expanded_rect[1]) / max(1, rect.height),
         )
 
-        current_key_font = (
-            function_key_font
-            if getattr(button, "font_role", "default") == "function_small"
-            else key_font
-        )
-
-        bbox = draw.textbbox(
-            (0, 0),
-            label,
-            font=current_key_font
-        )
-
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-
-        text_x = nx + (nw - text_w)//2 - bbox[0]
-        text_y = ny + (nh - text_h)//2 - bbox[1]
-
-        draw.text(
-            (text_x, text_y),
-            label,
-            font=current_key_font,
-            fill=text_color
+        _draw_key(
+            draw,
+            expand_target,
+            expanded_rect,
+            dwell_key,
+            dwell_ratio,
+            show_cursor,
+            locked_key,
+            font_scale=max(1.0, font_scale),
         )
 
     return np.array(img_pil)
+
 
 def draw_gaze_cursor(
     img,
