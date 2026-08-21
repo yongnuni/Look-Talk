@@ -928,7 +928,12 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                     mouth.locked_key
                     if mouth_mode
                     else None
-                )
+                ),
+
+                # 고정 감지로 확대해 그릴 키. 판정(히트박스)은 이보다 조금 더
+                # 넓고, 나머지 키의 위치·크기는 그대로 유지된다.
+                expanded_button=dwell.fixation_hitbox.anchor_button,
+                expanded_rect=dwell.fixation_hitbox.anchor_visual_rect(),
             )
 
             if tester.is_showing_complete():
@@ -970,6 +975,48 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                     (255, 100, 0),
                     2
                 )
+
+                # ── 고정 감지형 히트박스 확장 상태 ──
+                # 판정 영역만 넓히는 기능이라 평소 화면에는 아무 표시도 하지
+                # 않는다. 임계값 튜닝을 위해 'd' 오버레이에서만 확장 사각형과
+                # 속도/지속시간을 보여준다.
+                fixation_state = dwell.fixation_state
+
+                fixation_text = (
+                    f"Fixation: {'ON' if dwell.fixation_hitbox.active else 'off'} "
+                    f"key={dwell.fixation_hitbox.anchor_key} "
+                    f"dur={fixation_state.duration_sec:.2f}s "
+                    + (
+                        f"v={fixation_state.velocity_deg_per_sec:.1f}deg/s"
+                        if fixation_state.velocity_deg_per_sec is not None
+                        else "v=N/A"
+                    )
+                )
+
+                cv2.putText(
+                    kbd_bg,
+                    fixation_text,
+                    (30, SCREEN_H - 300),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (
+                        (0, 255, 0)
+                        if dwell.fixation_hitbox.active
+                        else (255, 255, 255)
+                    ),
+                    2
+                )
+
+                debug_rect = dwell.fixation_hitbox.anchor_debug_rect()
+
+                if debug_rect is not None:
+                    cv2.rectangle(
+                        kbd_bg,
+                        (debug_rect[0], debug_rect[1]),
+                        (debug_rect[2], debug_rect[3]),
+                        (0, 255, 0),
+                        2
+                    )
 
                 pose_text = (
                     f"Valid:{head_pose['valid']} "

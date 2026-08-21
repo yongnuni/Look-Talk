@@ -1,3 +1,5 @@
+import math
+
 import cv2
 import tkinter as tk
 
@@ -73,6 +75,61 @@ CALIB_STD_Y = 0.008
 
 FIXATION_RADIUS = 40
 FIXATION_FRAMES = 6
+
+# ── 고정(fixation) 감지 기반 히트박스 확장 ────────────────────
+# 위의 FIXATION_RADIUS/FRAMES는 GazePipeline이 커서 좌표를 안정화할 때 쓰는
+# 값이고, 아래 값들은 그와 완전히 분리된 판정 전용 레이어의 설정이다.
+# 시선 좌표 자체는 전혀 바꾸지 않고, 고정이 시작된 키 하나의 판정 영역만
+# 넓힌다(화면에 그려지는 키 크기는 그대로).
+
+VIEWING_DISTANCE_CM = 60.0   # ← 측정자가 눈~화면 실제 거리(cm)로 수정
+
+# 시야각 1°가 화면에서 차지하는 px. 속도(°/s)·분산(°) 임계값의 px 환산에 쓴다.
+PX_PER_DEG = (
+    2.0 * VIEWING_DISTANCE_CM * math.tan(math.radians(0.5)) * PX_PER_CM
+)
+
+FIXATION_HITBOX_ENABLED = True
+
+# I-VT: 점간 이동 속도가 이 값 이하로 떨어지면 고정 후보.
+# 연구에서 쓰이는 5~50°/s 범위의 중간값.
+FIXATION_VELOCITY_DEG_PER_SEC = 30.0
+
+# I-DT: 고정 중심에서 이 반경 안에 머물러야 고정으로 본다(체스 연구 기준 약 1°).
+FIXATION_DISPERSION_DEG = 1.0
+
+# 고정 성립에 필요한 최소 지속 시간(100~200ms 범위).
+# dwell 판정(DWELL_SEC)보다 훨씬 짧아야 dwell이 차기 전에 확장이 걸린다.
+FIXATION_MIN_DURATION_SEC = 0.15
+
+# 고정 해제 반경. 성립 이후에는 조금 관대하게 두어 미세한 흔들림 때문에
+# 확장이 켜졌다 꺼졌다 하지 않게 한다(히스테리시스).
+FIXATION_RELEASE_DEG = 1.5
+
+# 프레임 간격이 이보다 크면(모드 전환·캘리브레이션 등으로 루프가 끊긴 경우)
+# 연속된 시선으로 이어 붙이지 않고 고정 상태를 새로 시작한다.
+FIXATION_MAX_GAP_SEC = 0.3
+
+# 확장량 = 키 한 변 × 이 비율(각 변 바깥으로).
+# 0.5면 판정 폭이 "키 폭 + 키 폭"(= 2배)이 된다.
+FIXATION_HITBOX_EXPAND_RATIO = 0.5
+
+# 확장이 인접 키를 덮을 수 있는 최대 깊이(그 키 한 변 대비 비율).
+# 겹치는 구간에서는 확장된 쪽이 이기므로, 인접 키가 통째로 먹히지 않도록
+# 침범 깊이를 제한한다. 1/3이면 인접 키의 나머지 2/3는 그대로 남는다.
+FIXATION_HITBOX_MAX_OVERLAP_RATIO = 1.0 / 3.0
+
+# 고정된 키캡을 화면에서도 실제로 키울지. 끄면 판정 영역만 넓어진다.
+FIXATION_VISUAL_EXPAND_ENABLED = True
+
+# 시각 확대 비율. 히트박스 비율보다 작게 두면 "보이는 것보다 판정이 조금 더
+# 너그러운" 암묵 확장이 된다. 침범 한도(1/3)는 시각 확대에도 똑같이 걸리므로
+# 인접 키가 통째로 가려지지 않는다.
+FIXATION_VISUAL_EXPAND_RATIO = 0.35
+
+# 확대 애니메이션 길이(초). 80~150ms의 짧은 1회성 ease-out —
+# 없으면 반응 체감이 약하고, 길거나 반복되면 시각 유발성 멀미 리스크가 커진다.
+FIXATION_VISUAL_ANIM_SEC = 0.12
 
 # ── 릿지 회귀 설정 ─────────────────────────────────────────────
 
