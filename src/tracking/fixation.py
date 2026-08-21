@@ -32,8 +32,6 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from src.keyboard import hit_test_buttons
-
 from src.config import (
     FIXATION_DISPERSION_DEG,
     FIXATION_HITBOX_ENABLED,
@@ -290,31 +288,34 @@ class FixationDetector:
 # =========================================================
 
 def expanded_bounds(
-    button,
-    button_list,
+    target,
+    targets,
     expand_ratio,
     radius_px=None,
     max_overlap_ratio=FIXATION_HITBOX_MAX_OVERLAP_RATIO,
 ):
     """확장된 판정 사각형을 (left, top, right, bottom)으로 계산한다.
 
-    확장량은 키 한 변 x expand_ratio다 — 0.5면 좌우로 각각 폭의 절반이 붙어
-    판정 폭이 "키 폭 + 키 폭"이 된다. 고정 px가 아니라 키 크기에서 뽑기
-    때문에 해상도나 레이아웃(쿼티/천지인)이 달라져도 키캡 UI와 같은 비율을
-    유지한다. radius_px(개인별 시선 오차 반경 등)가 주어지면 그보다 작아지지
-    않게 올린다.
+    target/targets는 rect(KeyRect)를 가진 선택 대상이면 무엇이든 된다 —
+    키캡 버튼과 추천(자동완성) 슬롯이 같은 규칙으로 확장된다.
 
-    확장은 인접 키를 덮어도 되지만, 어떤 키도 그 키의 max_overlap_ratio
+    확장량은 대상 한 변 x expand_ratio다 — 0.5면 좌우로 각각 폭의 절반이 붙어
+    판정 폭이 "폭 + 폭"이 된다. 고정 px가 아니라 대상 크기에서 뽑기 때문에
+    해상도나 레이아웃(쿼티/천지인)이 달라져도 UI와 같은 비율을 유지하고,
+    키보다 훨씬 넓은 추천 슬롯에도 그대로 적용된다. radius_px(개인별 시선
+    오차 반경 등)가 주어지면 그보다 작아지지 않게 올린다.
+
+    확장은 이웃을 덮어도 되지만, 어떤 대상도 그 대상의 max_overlap_ratio
     (기본 1/3)보다 깊게 침범하지 않는다. 한도는 변마다 따로 계산한다 —
-    오른쪽에는 좁은 기능키가, 왼쪽에는 스페이스바가 올 수 있어서 하나로
-    묶으면 좁은 쪽 기준으로 네 변이 전부 깎이기 때문이다.
+    오른쪽에는 좁은 기능키가, 왼쪽에는 스페이스바가, 위에는 추천 슬롯이 올 수
+    있어서 하나로 묶으면 좁은 쪽 기준으로 네 변이 전부 깎이기 때문이다.
 
-    Button.rect는 읽기만 한다. 화면에 그려지는 키의 위치와 크기는 이 계산에
-    전혀 영향받지 않는다 — 키캡 레이아웃은 정적으로 고정되고, 넓어지는 것은
-    판정 영역뿐이다.
+    rect는 읽기만 한다. 화면에 그려지는 위치와 크기는 이 계산에 전혀
+    영향받지 않는다 — 레이아웃은 정적으로 고정되고, 넓어지는 것은 판정
+    영역뿐이다.
     """
 
-    rect = button.rect
+    rect = target.rect
 
     desired_x = rect.width * expand_ratio
     desired_y = rect.height * expand_ratio
@@ -326,13 +327,13 @@ def expanded_bounds(
     left = right = desired_x
     top = bottom = desired_y
 
-    for other in button_list:
-        if other is button:
+    for other in targets:
+        if other is target:
             continue
 
         other_rect = other.rect
 
-        # 가로 방향: 세로 구간이 겹치는 키만 좌우 이웃으로 본다.
+        # 가로 방향: 세로 구간이 겹치는 대상만 좌우 이웃으로 본다.
         if (
             other_rect.y < rect.bottom
             and other_rect.bottom > rect.y
@@ -351,7 +352,7 @@ def expanded_bounds(
                     + other_rect.width * max_overlap_ratio,
                 )
 
-        # 세로 방향: 가로 구간이 겹치는 키만 위아래 이웃으로 본다.
+        # 세로 방향: 가로 구간이 겹치는 대상만 위아래 이웃으로 본다.
         if (
             other_rect.x < rect.right
             and other_rect.right > rect.x
@@ -430,10 +431,10 @@ class FixationHitbox:
     화면 렌더링은 이 레이어를 참조하지 않는다 — 키캡의 위치와 크기는 정적으로
     고정되고, 확장은 판정 영역에만 존재한다.
 
-    앵커를 Button 객체가 아니라 **좌표**로 기억하는 이유: process_key()가
-    Shift/한영 전환 때 buttonList를 통째로 새로 만들기 때문에, 객체를 들고
-    있으면 화면에 없는 버튼을 가리키게 된다. 좌표로 들고 있다가 매 프레임
-    현재 buttonList에서 다시 찾으면 그 문제가 생기지 않는다.
+    앵커를 객체가 아니라 **좌표**로 기억하는 이유: process_key()가
+    Shift/한영 전환 때 buttonList를, 추천 갱신 때 슬롯 목록을 통째로 새로
+    만들기 때문에, 객체를 들고 있으면 화면에 없는 대상을 가리키게 된다.
+    좌표로 들고 있다가 매 프레임 현재 목록에서 다시 찾으면 그 문제가 없다.
     """
 
     def __init__(
@@ -468,7 +469,7 @@ class FixationHitbox:
         self._anchor_visual_bounds = None
         self._anchor_started_at = None
         self._anchored_fixation_id = None
-        self.anchor_button = None
+        self.anchor_target = None
         self.state = IDLE_STATE
 
     def reset(self):
@@ -481,27 +482,27 @@ class FixationHitbox:
         self._anchor_bounds = None
         self._anchor_visual_bounds = None
         self._anchor_started_at = None
-        self.anchor_button = None
+        self.anchor_target = None
 
     @property
     def active(self):
         """지금 확장이 실제로 걸려 있는지."""
-        return self.anchor_button is not None
+        return self.anchor_target is not None
 
     @property
     def anchor_key(self):
         return (
-            self.anchor_button.text
-            if self.anchor_button is not None
+            self.anchor_target.text
+            if self.anchor_target is not None
             else None
         )
 
-    def bounds_of(self, button, button_list):
-        """이 레이어의 설정으로 계산한 버튼의 확장 사각형."""
+    def bounds_of(self, target, targets):
+        """이 레이어의 설정으로 계산한 대상의 확장 사각형."""
 
         return expanded_bounds(
-            button,
-            button_list,
+            target,
+            targets,
             self.expand_ratio,
             self.personal_radius_px,
             self.max_overlap_ratio,
@@ -511,7 +512,7 @@ class FixationHitbox:
     # 프레임 갱신
     # -----------------------------------------------------
 
-    def update(self, gaze_x, gaze_y, button_list, valid=True, now=None):
+    def update(self, gaze_x, gaze_y, targets, valid=True, now=None):
         """고정 여부를 갱신하고 확장 대상 키를 정한다."""
 
         if not self.enabled:
@@ -532,7 +533,7 @@ class FixationHitbox:
             self._anchored_fixation_id = None
             return self.state
 
-        anchor_button = None
+        anchor_target = None
 
         # ── 새 고정이 성립하면 확장 대상을 그쪽으로 옮긴다 ──
         # 도약이 끝난 시점 = 사용자가 목표를 이미 찾은 시점.
@@ -540,13 +541,13 @@ class FixationHitbox:
             self.state.active
             and self._anchored_fixation_id != self.state.fixation_id
         ):
-            anchor_button = self._find_anchor_button(
-                button_list,
+            anchor_target = self._find_anchor_target(
+                targets,
                 self.state.center_x,
                 self.state.center_y,
             )
 
-            if anchor_button is not None:
+            if anchor_target is not None:
                 self._anchor_center = (
                     self.state.center_x,
                     self.state.center_y,
@@ -557,35 +558,35 @@ class FixationHitbox:
         # 시선이 확장 영역을 벗어날 때 내린다. 각도 기준 고정 반경만으로
         # 판단하면(1.5°가 키 반폭보다 작을 수 있다) 시선이 키 가장자리로
         # 흐르는 순간 — 확장이 가장 필요한 순간 — 풀려 버린다.
-        if anchor_button is None and self._anchor_center is not None:
-            held_button = self._find_anchor_button(
-                button_list,
+        if anchor_target is None and self._anchor_center is not None:
+            held_target = self._find_anchor_target(
+                targets,
                 *self._anchor_center
             )
 
-            if held_button is not None and bounds_contain(
-                self.bounds_of(held_button, button_list),
+            if held_target is not None and bounds_contain(
+                self.bounds_of(held_target, targets),
                 gaze_x,
                 gaze_y,
             ):
-                anchor_button = held_button
+                anchor_target = held_target
 
             else:
                 self._anchor_center = None
 
-        previous_button = self.anchor_button
-        self.anchor_button = anchor_button
+        previous_target = self.anchor_target
+        self.anchor_target = anchor_target
 
         self._anchor_bounds = (
-            self.bounds_of(anchor_button, button_list)
-            if anchor_button is not None
+            self.bounds_of(anchor_target, targets)
+            if anchor_target is not None
             else None
         )
 
         self._update_visual_bounds(
-            previous_button,
-            anchor_button,
-            button_list,
+            previous_target,
+            anchor_target,
+            targets,
             now,
         )
 
@@ -593,9 +594,9 @@ class FixationHitbox:
 
     def _update_visual_bounds(
         self,
-        previous_button,
-        anchor_button,
-        button_list,
+        previous_target,
+        anchor_target,
+        targets,
         now,
     ):
         """확대 애니메이션을 한 프레임 진행시킨다.
@@ -604,7 +605,7 @@ class FixationHitbox:
         재생되고 되돌아가지 않는다(반복 pulsing은 시각 유발성 멀미 리스크).
         """
 
-        if anchor_button is None or not self.visual_enabled:
+        if anchor_target is None or not self.visual_enabled:
             self._anchor_visual_bounds = None
             self._anchor_started_at = None
             return
@@ -613,18 +614,18 @@ class FixationHitbox:
             now = time.monotonic()
 
         anchor_changed = (
-            previous_button is None
-            or previous_button is not anchor_button
+            previous_target is None
+            or previous_target is not anchor_target
         )
 
         if anchor_changed or self._anchor_started_at is None:
             self._anchor_started_at = now
 
-        rect = anchor_button.rect
+        rect = anchor_target.rect
 
         target = expanded_bounds(
-            anchor_button,
-            button_list,
+            anchor_target,
+            targets,
             self.visual_expand_ratio,
             self.personal_radius_px,
             self.max_overlap_ratio,
@@ -658,68 +659,70 @@ class FixationHitbox:
             for value in self._anchor_visual_bounds
         )
 
-    def _find_anchor_button(self, button_list, center_x, center_y):
-        """고정 중심에 해당하는 키를 현재 buttonList에서 찾는다.
+    def _find_anchor_target(self, targets, center_x, center_y):
+        """고정 중심에 해당하는 대상을 현재 목록에서 찾는다.
 
-        중심이 키 사이 여백에 떨어진 경우가 이 기능이 실제로 필요한 상황이다.
-        그때는 확장 영역이 중심을 포함하는 키 중 중심에서 가장 가까운 키를
-        고른다. 확장 영역 밖이면 어떤 키도 고르지 않는다(무리한 보정 금지).
+        중심이 대상 사이 여백에 떨어진 경우가 이 기능이 실제로 필요한
+        상황이다. 그때는 확장 영역이 중심을 포함하는 대상 중 중심에서 가장
+        가까운 것을 고른다. 확장 영역 밖이면 아무것도 고르지 않는다
+        (무리한 보정 금지).
         """
 
-        for button in button_list:
-            if button.rect.contains(center_x, center_y):
-                return button
+        for target in targets:
+            if target.rect.contains(center_x, center_y):
+                return target
 
-        nearest_button = None
+        nearest_target = None
         nearest_distance = None
 
-        for button in button_list:
+        for target in targets:
             if not bounds_contain(
-                self.bounds_of(button, button_list),
+                self.bounds_of(target, targets),
                 center_x,
                 center_y,
             ):
                 continue
 
-            button_center_x, button_center_y = button.rect.center
+            target_center_x, target_center_y = target.rect.center
 
             distance = math.hypot(
-                center_x - button_center_x,
-                center_y - button_center_y,
+                center_x - target_center_x,
+                center_y - target_center_y,
             )
 
             if (
                 nearest_distance is None
                 or distance < nearest_distance
             ):
-                nearest_button = button
+                nearest_target = target
                 nearest_distance = distance
 
-        return nearest_button
+        return nearest_target
 
     # -----------------------------------------------------
     # 확장을 반영한 hit-test
     # -----------------------------------------------------
 
-    def hit_test(self, button_list, point_x, point_y):
+    def hit_test(self, targets, point_x, point_y):
         """확장 영역이 최우선, 그 밖에서는 기존 판정 그대로.
 
-        인접 키와 겹치는 구간에서는 확장된 키가 이긴다. 확장 중이 아니면
-        src.keyboard.hit_test_buttons와 결과가 완전히 같다.
+        겹치는 구간에서는 확장된 대상이 이긴다. 확장 중이 아니면 목록 순서대로
+        실제 사각형을 검사하는 기존 판정과 결과가 완전히 같다(그래서 호출부는
+        우선순위가 높은 대상을 목록 앞에 둔다 — 예: 추천 슬롯 먼저, 키 나중).
         """
 
         if (
-            self.anchor_button is not None
+            self.anchor_target is not None
             and self._anchor_bounds is not None
             and bounds_contain(self._anchor_bounds, point_x, point_y)
         ):
-            return self.anchor_button
+            return self.anchor_target
 
-        return hit_test_buttons(
-            button_list,
-            point_x,
-            point_y,
-        )
+        for target in targets:
+            if target.rect.contains(point_x, point_y):
+                return target
+
+        return None
 
     def anchor_debug_rect(self):
         """디버그 오버레이용 확장 사각형 (x, y, right, bottom). 없으면 None."""

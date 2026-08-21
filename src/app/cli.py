@@ -61,6 +61,30 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--condition-label",
+        dest="condition_label",
+        default="",
+        help=(
+            "sessions.csv에 기록될 실험 조건 라벨(자유 문자열, 기본값 빈 "
+            "문자열). config_hash는 파라미터만 포착하므로, 코드를 바꾸고 "
+            "파라미터가 그대로면 두 조건이 같은 해시로 묶인다 — 'baseline' / "
+            "'new-smoothing'처럼 실험자가 직접 구분하려면 지정한다."
+        ),
+    )
+
+    parser.add_argument(
+        "--calib-points",
+        dest="calib_points",
+        type=int,
+        choices=[9, 16],
+        default=16,
+        help=(
+            "calibrated 모드에서 사용할 캘리브레이션 점 개수. "
+            "9 또는 16을 선택할 수 있으며 기본값은 16이다."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
@@ -76,5 +100,7 @@ def parse_args():
         args.gaze_mode,
         args.strategy,
         args.keyboard_layout,
-        args.user_id
+        args.user_id,
+        args.condition_label,
+        args.calib_points
     )

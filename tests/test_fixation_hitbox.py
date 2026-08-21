@@ -204,7 +204,7 @@ def test_fixated_key_absorbs_the_neighbouring_gap():
     _hold(hitbox, buttons, left.rect.center)
 
     assert hitbox.active
-    assert hitbox.anchor_button is left
+    assert hitbox.anchor_target is left
     # 확장 전에는 어떤 키도 아니던 여백이 고정된 키로 흡수된다.
     assert hit_test_buttons(buttons, *gap_point) is None
     assert hitbox.hit_test(buttons, *gap_point) is left
@@ -216,7 +216,7 @@ def test_expansion_wins_inside_the_overlap_and_stops_at_a_third():
     hitbox = _hitbox()
 
     _hold(hitbox, buttons, left.rect.center)
-    assert hitbox.anchor_button is left
+    assert hitbox.anchor_target is left
 
     third = right.rect.width / 3
     y = right.rect.center[1]
@@ -260,7 +260,7 @@ def test_new_fixation_inside_the_overlap_moves_the_expansion():
     hitbox = _hitbox()
 
     _, now = _hold(hitbox, buttons, left.rect.center)
-    assert hitbox.anchor_button is left
+    assert hitbox.anchor_target is left
 
     overlap_point = (
         right.rect.x + right.rect.width / 6,
@@ -274,7 +274,7 @@ def test_new_fixation_inside_the_overlap_moves_the_expansion():
     # 그 자리에 고정이 성립하면 확장이 그 키로 넘어간다.
     _hold(hitbox, buttons, overlap_point, start=now + 0.10)
 
-    assert hitbox.anchor_button is right
+    assert hitbox.anchor_target is right
     assert hitbox.hit_test(buttons, *overlap_point) is right
 
 
@@ -288,7 +288,7 @@ def test_fixation_centre_in_a_gap_anchors_to_the_nearest_key():
     _hold(hitbox, buttons, gap_point_near_left)
 
     assert hitbox.active
-    assert hitbox.anchor_button is left
+    assert hitbox.anchor_target is left
     assert hitbox.hit_test(buttons, *gap_point) is left
 
 
@@ -306,7 +306,7 @@ def test_expansion_survives_gaze_drifting_to_the_key_edge():
 
     hitbox.update(gap_point[0], gap_point[1], buttons, now=now)
 
-    assert hitbox.anchor_button is left
+    assert hitbox.anchor_target is left
     assert hitbox.hit_test(buttons, *gap_point) is left
 
 
@@ -316,16 +316,16 @@ def test_looking_at_another_key_moves_the_expansion_there():
     hitbox = _hitbox()
 
     _, now = _hold(hitbox, buttons, left.rect.center)
-    assert hitbox.anchor_button is left
+    assert hitbox.anchor_target is left
 
     # 다른 키의 실제 사각형을 보기 시작하면 이전 확장은 즉시 내려간다.
     hitbox.update(*right.rect.center, buttons, now=now)
-    assert hitbox.anchor_button is None
+    assert hitbox.anchor_target is None
 
     # 그 키에 고정이 성립하면 확장이 그쪽으로 옮겨 간다.
     _hold(hitbox, buttons, right.rect.center, start=now + 0.05)
 
-    assert hitbox.anchor_button is right
+    assert hitbox.anchor_target is right
     assert hitbox.hit_test(buttons, *gap_point) is right
 
 
@@ -341,7 +341,7 @@ def test_personal_radius_sets_a_floor_for_the_expansion():
     )
 
     _hold(hitbox, buttons, top_left.rect.center)
-    assert hitbox.anchor_button is top_left
+    assert hitbox.anchor_target is top_left
 
     center_x = top_left.rect.center[0]
 
@@ -388,7 +388,7 @@ def test_expansion_scales_with_the_key_size():
     assert large_margin > small_margin
 
 
-def test_anchor_survives_button_list_rebuild():
+def test_anchor_survives_target_list_rebuild():
     """Shift/한영 전환으로 buttonList가 새로 생성돼도 확장이 유지된다."""
     buttons = _buttons()
     left, _, gap_point = _adjacent_pair(buttons)
@@ -407,7 +407,7 @@ def test_anchor_survives_button_list_rebuild():
         now=now,
     )
 
-    assert hitbox.anchor_button in rebuilt
+    assert hitbox.anchor_target in rebuilt
     assert hitbox.hit_test(rebuilt, *gap_point) is rebuilt[
         buttons.index(left)
     ]
@@ -436,7 +436,7 @@ def test_visual_rect_starts_at_the_real_keycap_and_grows():
     hitbox = _hitbox()
 
     now = 0.0
-    while hitbox.anchor_button is None and now < 1.0:
+    while hitbox.anchor_target is None and now < 1.0:
         hitbox.update(*left.rect.center, buttons, now=now)
         now += 0.05
 

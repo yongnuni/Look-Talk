@@ -126,6 +126,9 @@ class MouthClickDetector:
         # 마지막 클릭 시간
         self.last_click_time = 0.0
 
+        # 추천 목록처럼 선택 대상의 의미가 바뀌는 외부 문맥
+        self.target_context = None
+
     # -----------------------------------------------------
     # 개인 Threshold 적용
     # -----------------------------------------------------
@@ -176,6 +179,32 @@ class MouthClickDetector:
         self.selected_key = None
 
         self.clicked = False
+
+    def reset_target_lock(self):
+        """입 상태는 유지하면서 현재 시선 대상 잠금만 안전하게 취소합니다.
+
+        입을 벌린 도중 추천 목록이 바뀌면 그 제스처로 새 후보가 선택되지
+        않도록, 입을 다시 닫을 때까지 현재 제스처를 소비된 상태로 둡니다.
+        """
+
+        self.candidate_key = None
+        self.candidate_start = None
+        self.locked_key = None
+        self.selected_key = None
+        self.start_key = None
+
+        if self.is_open:
+            self.clicked = True
+
+    def set_target_context(self, context):
+        """선택 대상 목록 변경 시 기존 hover/lock을 무효화합니다."""
+
+        if context == self.target_context:
+            return False
+
+        self.target_context = context
+        self.reset_target_lock()
+        return True
 
     # -----------------------------------------------------
     # 입벌림 전 시선 키 잠금

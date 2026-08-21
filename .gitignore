@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.csv
+!src/recommendation/data/hospital_phrases.csv
 *.json
 *.png
 *.pkl

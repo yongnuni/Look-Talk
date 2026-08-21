@@ -70,7 +70,7 @@ FUNCTION_ROW_RIGHT = ["Del"]
 # dwell/mouth/process_key는 이 매핑을 몰라도 된다.
 DISPLAY_LABELS = {
     "Shift": "shift",
-    "Del": "뒤돌리기",
+    "Del": "되돌리기",
     " ": "스페이스",
 }
 
@@ -152,6 +152,34 @@ def hit_test_buttons(button_list, point_x, point_y):
     for button in button_list:
         if button.rect.contains(point_x, point_y):
             return button
+    return None
+
+
+def calculate_suggestion_rects(suggestion_rect, key_gap_x):
+    """예약된 추천 영역을 동일 계열 너비의 독립 슬롯 3개로 나눈다."""
+
+    x, y, width, height = suggestion_rect
+    usable_width = width - 2 * key_gap_x
+    base_width, remainder = divmod(usable_width, 3)
+    rects = []
+    current_x = x
+
+    for index in range(3):
+        rect_width = base_width + (1 if index < remainder else 0)
+        rects.append(KeyRect(current_x, y, rect_width, height))
+        current_x += rect_width
+        if index < 2:
+            current_x += key_gap_x
+
+    return tuple(rects)
+
+
+def hit_test_suggestions(suggestion_rects, point_x, point_y):
+    """독립 추천 hitbox 중 점을 포함하는 슬롯 인덱스를 반환한다."""
+
+    for index, rect in enumerate(suggestion_rects):
+        if rect.contains(point_x, point_y):
+            return index
     return None
 
 
@@ -276,6 +304,13 @@ def calculate_keyboard_layout(screen_w, screen_h):
     input_x = outer_margin_x
     input_w = confirm_x - confirm_gap - input_x
 
+    suggestion_rect = (
+        outer_margin_x,
+        suggestion_y,
+        screen_w - 2 * outer_margin_x,
+        suggestion_h,
+    )
+
     return {
         "screen_w": screen_w,
         "screen_h": screen_h,
@@ -294,11 +329,10 @@ def calculate_keyboard_layout(screen_w, screen_h):
 
         "input_rect": (input_x, input_y, input_w, input_h),
         "confirm_rect": (confirm_x, input_y, confirm_w, input_h),
-        "suggestion_rect": (
-            outer_margin_x,
-            suggestion_y,
-            screen_w - 2 * outer_margin_x,
-            suggestion_h
+        "suggestion_rect": suggestion_rect,
+        "suggestion_rects": calculate_suggestion_rects(
+            suggestion_rect,
+            key_gap_x,
         ),
 
         "keyboard_top": keyboard_top,
@@ -629,6 +663,165 @@ def _diff_tail(before, after):
     inserted_text = after[common_len:]
 
     return deleted_count, inserted_text
+
+
+def apply_suggestion(
+    suggestion,
+    is_korean,
+    keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
+):
+    """화면에 보이는 마지막 입력 단어를 추천 문장으로 교체합니다.
+
+    조합 중인 자모와 천지인 pending preview까지 포함한 문자열을 기준으로
+    교체하므로, 선택 전 화면과 선택 후 ``finalText`` 사이의 꼬리 diff를
+    정확히 반환합니다. 선택 결과는 확정 문자열로 두고 모든 조합 상태를
+    한 곳에서 초기화합니다.
+    """
+
+    if not isinstance(suggestion, str) or not suggestion:
+        return 0, ""
+
+    from src import hangul
+
+    composite_before = _composite_text(is_korean, keyboard_layout)
+    last_space_index = composite_before.rfind(" ")
+    preserved_prefix = composite_before[:last_space_index + 1]
+    composite_after = preserved_prefix + suggestion
+
+    hangul.finalText = composite_after
+    hangul.jamo_buffer[:] = ['', '', '']
+    cheonjiin_composer.reset()
+
+    return _diff_tail(composite_before, composite_after)
+
+
+class PendingWordBoundaryState:
+    """추천 선택 뒤 다음 단어의 공백을 실제 문자 입력까지 지연합니다."""
+
+    _CLEARING_KEYS = {"Del", "확인", "Enter"}
+    _PRESERVING_FUNCTION_KEYS = {"Shift", "한/영"}
+
+    def __init__(self):
+        self.pending_word_boundary = False
+
+    def mark_pending(self):
+        self.pending_word_boundary = True
+
+    def clear(self):
+        self.pending_word_boundary = False
+
+    @staticmethod
+    def _is_word_forming_key(key):
+        return (
+            key in CHEONJIIN_CHARACTER_KEYS
+            or (isinstance(key, str) and key.isalnum())
+        )
+
+    @staticmethod
+    def _commit_visible_input(is_korean, keyboard_layout):
+        """문장부호 등 화면상의 조합 문자열을 공백 앞에 확정합니다."""
+
+        if (
+            keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+            and is_korean
+        ):
+            cheonjiin_composer.commit()
+        elif is_korean:
+            flush_buffer()
+
+    def handle_key(
+        self,
+        key,
+        is_korean,
+        is_shift,
+        button_list,
+        keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
+    ):
+        """실제 키 한 건과 필요한 자동 공백을 하나의 diff로 처리합니다."""
+
+        if not self.pending_word_boundary:
+            return process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+
+        from src import hangul
+
+        composite_before = _composite_text(is_korean, keyboard_layout)
+
+        if key == " ":
+            self._commit_visible_input(is_korean, keyboard_layout)
+            if not hangul.finalText.endswith(" "):
+                hangul.finalText += " "
+            self.clear()
+            deleted_count, inserted_text = _diff_tail(
+                composite_before,
+                _composite_text(is_korean, keyboard_layout),
+            )
+            return (
+                is_korean,
+                is_shift,
+                button_list,
+                deleted_count,
+                inserted_text,
+            )
+
+        if key in self._CLEARING_KEYS:
+            self.clear()
+            return process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+
+        if key in self._PRESERVING_FUNCTION_KEYS:
+            return process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+
+        if self._is_word_forming_key(key):
+            self._commit_visible_input(is_korean, keyboard_layout)
+            if not hangul.finalText.endswith(" "):
+                hangul.finalText += " "
+            self.clear()
+
+            result = process_key(
+                key,
+                is_korean,
+                is_shift,
+                button_list,
+                keyboard_layout,
+            )
+            next_is_korean, next_is_shift, next_button_list = result[:3]
+            deleted_count, inserted_text = _diff_tail(
+                composite_before,
+                _composite_text(next_is_korean, keyboard_layout),
+            )
+            return (
+                next_is_korean,
+                next_is_shift,
+                next_button_list,
+                deleted_count,
+                inserted_text,
+            )
+
+        # 문장부호는 공백 없이 처리하고 다음 일반 문자까지 pending을 유지한다.
+        return process_key(
+            key,
+            is_korean,
+            is_shift,
+            button_list,
+            keyboard_layout,
+        )
 
 
 def process_key(key,is_korean,is_shift,buttonList,keyboard_layout=KEYBOARD_LAYOUT_QWERTY):

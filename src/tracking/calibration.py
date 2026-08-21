@@ -6,7 +6,7 @@ import time
 from src.metrics.csv_export import append_rows
 from src.common import ids
 from src.config import (
-    CALIB_POINTS,
+    CALIB_POINTS_16,
     SCREEN_W,
     SCREEN_H,
     CALIB_STABILIZE_SEC,
@@ -181,7 +181,15 @@ class Calibrator:
 
     CALIB_SCHEMA_VERSION = "1.4"
 
-    def __init__(self):
+    def __init__(self, calib_points=None):
+        # 캘리브레이션 점 설정
+        # calib_points가 전달되지 않으면 기존과 동일하게 16점을 사용한다.
+        self.calib_points = (
+            list(calib_points)
+            if calib_points is not None
+            else list(CALIB_POINTS_16)
+        )
+
         # 마지막으로 품질 기준을 통과한 Homography 보관
         # reset()을 실행해도 유지되어야 함
         self.last_good_H = None
@@ -206,7 +214,7 @@ class Calibrator:
         self.sample_confs = []
 
         # ── 릿지용 원시 샘플 (점당 평균이 아니라 프레임 단위로 쌓음) ──
-        # 홈그래피는 점당 대표값 16개로 충분하지만,
+        # 홈그래피는 각 캘리브레이션 점의 대표값을 사용하지만,
         # 릿지는 샘플 수가 많을수록 정규화가 안정되므로
         # 수집 구간의 모든 유효 프레임 특징을 그대로 사용합니다.
         self.feature_samples = []      # 현재 점에서 수집 중인 특징들
@@ -443,7 +451,7 @@ class Calibrator:
 
                 self.pose_pts.append(pose_avg)
 
-            sx, sy = CALIB_POINTS[self.idx]
+            sx, sy = self.calib_points[self.idx]
 
             self.screen_pts.append(
                 [
@@ -510,7 +518,7 @@ class Calibrator:
             self.feature_samples = []
             self.hold_start = None
 
-            if self.idx >= len(CALIB_POINTS):
+            if self.idx >= len(self.calib_points):
 
                 src = np.array(
                     self.iris_pts,
@@ -570,7 +578,7 @@ class Calibrator:
                             f"error={rec['reproj_error_px']:.1f}px"
                         )
 
-                    # STB-11 세션 요약: 16점 재투영 오차의 RMSE
+                    # STB-11 세션 요약: 전체 캘리브레이션 점 재투영 오차의 RMSE
                     self.calib_reproj_rmse_px = float(
                         np.sqrt(
                             np.mean(

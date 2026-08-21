@@ -13,6 +13,7 @@ import src.hangul as hangul
 
 from src.common import clock, ids
 from src.common.config_snapshot import build_snapshot, snapshot_hash
+from src.common.git_info import get_git_commit
 
 from src.config import (
     SCREEN_W,
@@ -20,6 +21,8 @@ from src.config import (
     PX_PER_CM,
     GAZE_AVG_WINDOW,
     MONITOR_DIAGONAL_INCH,
+    CALIB_POINTS_16,
+    CALIB_POINTS_9,
 )
 
 from src.tracking.eye_tracking import (
@@ -57,9 +60,11 @@ from src.metrics.session_logger import SessionLogger
 from src.tracking.feature_builder import build_features
 
 from src.keyboard import (
+    LAYOUT,
+    PendingWordBoundaryState,
+    apply_suggestion,
     create_buttons,
     create_cheonjiin_buttons,
-    process_key,
     keys_kor_normal,
     KEYBOARD_LAYOUT_QWERTY,
     KEYBOARD_LAYOUT_CHEONJIIN,
@@ -75,6 +80,7 @@ from src.ui import (
     draw_status_bar,
     draw_test_complete_overlay,
     draw_text_area,
+    draw_suggestion_boxes,
     draw_mouth_calibration_screen,
     draw_targeting_test_screen,
     draw_targeting_result_screen,
@@ -87,15 +93,44 @@ from src.vision.preprocessing import auto_brightness
 from src.app.cli import parse_args
 from src.metrics.baseline_history import append_mouth_baseline_history
 from src.metrics.tap_logging import log_input_tap
+from src.recommendation import (
+    SuggestionStateController,
+    format_suggestion_update,
+    initialize_recommender,
+)
+from src.recommendation.selection import (
+    SuggestionSlot,
+    SuggestionTarget,
+    build_fixation_targets,
+    resolve_input_target,
+    target_log_id,
+)
 from src.testing.targeting_export import export_targeting_results
 from src.testing.gaze_accuracy import run_gaze_accuracy_test, show_session_popup
 
 
-def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT_QWERTY,user_id="yejin"):
+def main(
+    mode=MODE_CALIBRATED,
+    strategy_name=None,
+    keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
+    user_id="yejin",
+    condition_label="",
+    calib_point_count=16
+):
     # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
     clock.init()
     run_id = ids.new_run_id()
+
+    suggestion_engine = initialize_recommender()
+    suggestion_state = SuggestionStateController()
+    if suggestion_engine.available:
+        print(
+            "[suggestions] initialized "
+            f"wordfreq={suggestion_engine.wordfreq_count} "
+            f"hospital={suggestion_engine.hospital_count} "
+            f"elapsed_ms={suggestion_engine.initialization_ms:.2f}"
+        )
 
     # 실험 조건 스냅샷: 9점 테스트('t') 여부와 무관하게 sessions 행에는
     # 항상 필요하므로 앱 실행 시작 시점에 1회 고정한다. config.py는 프로세스
@@ -105,6 +140,13 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
     config_json = json.dumps(
         config_snapshot_dict, sort_keys=True, ensure_ascii=False
     )
+
+    # git_commit: config_hash는 파라미터만 포착하므로 코드를 바꾸고 파라미터가
+    # 그대로면 두 조건이 같은 해시로 뭉친다 — 코드 버전(기능 실험 조건)은
+    # 별도로 여기서 1회 취득해 재사용한다(호출마다 subprocess를 새로 띄우지
+    # 않기 위함). config_snapshot에는 넣지 않는다 — 코드 버전은 파라미터가
+    # 아니므로 넣으면 커밋할 때마다 해시가 갈려 파라미터 실험 그룹핑이 깨진다.
+    git_commit = get_git_commit()
 
     cap = cv2.VideoCapture(0)
 
@@ -128,12 +170,34 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
         cv2.WINDOW_FULLSCREEN
     )
 
-    mapper = create_mapper(mode, strategy_name)
+    # ── 캘리브레이션 점 개수 선택 ─────────────────────────────
+    if calib_point_count == 9:
+        selected_calib_points = CALIB_POINTS_9
 
-    # Calibrator는 mapper 내부(CalibratedMapper._calibrator)에서 생성되므로
-    # 생성자 인자로는 주입할 수 없다. calibrated_mapper.py의 `calibrator`
-    # property(외부 공개용 탈출구로 이미 문서화돼 있음)를 통해 run_id만
-    # 넘긴다 — no_calibration 모드는 calibrator 자체가 없으므로 hasattr로 가드.
+    elif calib_point_count == 16:
+        selected_calib_points = CALIB_POINTS_16
+
+    else:
+        raise ValueError(
+            f"지원하지 않는 캘리브레이션 점 개수: "
+            f"{calib_point_count}"
+        )
+
+    mapper = create_mapper(
+        mode,
+        strategy_name,
+        calib_points=selected_calib_points
+    )
+
+    if mode == MODE_CALIBRATED:
+        print(
+            f"[calibration] "
+            f"{len(selected_calib_points)}점 캘리브레이션 사용"
+        )
+
+    # Calibrator는 mapper 내부(CalibratedMapper._calibrator)에서 생성됨.
+    # factory → CalibratedMapper를 통해 calib_points를 전달하고,
+    # 여기서는 run_id만 추가로 설정한다.
     if hasattr(mapper, "calibrator"):
         mapper.calibrator.set_run_id(run_id)
 
@@ -141,6 +205,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
     gaze = GazePipeline()
     dwell = DwellController()
     mouth = MouthClickDetector()
+    word_boundary_state = PendingWordBoundaryState()
     tester = TestRunner(run_id=run_id)
 
     targeting_runner = TargetingTestRunner(
@@ -200,6 +265,14 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
         buttonList = create_cheonjiin_buttons()
     else:
         buttonList = create_buttons(keys_kor_normal)
+
+    suggestion_rects = LAYOUT["suggestion_rects"]
+    initial_suggestion_context = (
+        suggestion_state.last_current_text,
+        suggestion_state.slots,
+    )
+    dwell.set_target_context(initial_suggestion_context)
+    mouth.set_target_context(initial_suggestion_context)
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
@@ -263,7 +336,10 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
             fixation_count = 0
             elapsed_ratio = 0.0
             mouth_click = False
+            hovered_target = None
             hovered_key = None
+            hovered_suggestion_index = None
+            clicked_target = None
             clicked_key = None
             dwell_ratio = 0.0
             mar = 0.0
@@ -654,41 +730,66 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
             # ── 입력 방식 처리 ─────────────────────────────────
 
             if tracking_valid:
+                # 이번 프레임의 선택 대상 전체(내용 있는 추천 + 키). 고정
+                # 갱신과 hit-test가 같은 목록을 봐야 확장 한도(서로 1/3)가
+                # 양쪽에 일관되게 걸린다.
+                fixation_targets = build_fixation_targets(
+                    suggestion_rects,
+                    suggestion_state.slots,
+                    buttonList,
+                )
+
+                # 고정 감지형 확장 — hit-test 전에 이번 프레임의 고정 상태를
+                # 먼저 갱신한다. dwell/깜빡임/입벌림 어느 트리거든 아래
+                # hit-test 결과를 그대로 쓰므로 여기 한 번이면 된다.
+                dwell.update_fixation(gaze_x, gaze_y, fixation_targets)
+
+                # 추천 hitbox는 buttonList와 분리한 채, 현재 프레임의 추천/키
+                # 중 하나만 공통 선택 대상으로 만든다.
+                hovered_target = resolve_input_target(
+                    suggestion_rects,
+                    suggestion_state.slots,
+                    buttonList,
+                    gaze_x,
+                    gaze_y,
+                    fixation_hitbox=dwell.fixation_hitbox,
+                    fixation_targets=fixation_targets,
+                )
+                if isinstance(hovered_target, SuggestionTarget):
+                    hovered_suggestion_index = hovered_target.index
+                else:
+                    hovered_key = hovered_target
 
                 # =================================================
                 # 입벌림 입력 모드
                 # =================================================
                 if mouth_mode:
-
-                    # 시선은 어떤 키를 바라보고 있는지 찾는 용도로만 사용
-                    hovered_key, _, _ = dwell.update(
-                        gaze_x,
-                        gaze_y,
-                        buttonList
-                    )
-
                     # 드웰 입력은 사용하지 않음
                     dwell.reset()
 
                     dwell_ratio = 0.0
-                    clicked_key = None
 
                     # 실제 클릭은 입벌림으로만 수행
                     mouth_click, mar = mouth.update(
                         lms,
-                        hovered_key
+                        hovered_target
                     )
+                    if mouth_click:
+                        clicked_target = mouth.selected_key
 
                 # =================================================
                 # 시선 Dwell 입력 모드
                 # =================================================
                 else:
-
-                    hovered_key, dwell_ratio, clicked_key = dwell.update(
-                        gaze_x,
-                        gaze_y,
-                        buttonList
-                    )
+                    (
+                        active_target,
+                        dwell_ratio,
+                        clicked_target,
+                    ) = dwell.update_target(hovered_target)
+                    if active_target is None:
+                        hovered_target = None
+                        hovered_key = None
+                        hovered_suggestion_index = None
 
                     # 시선 입력 모드에서는 입벌림 선택 비활성화
                     mouth.reset()
@@ -701,24 +802,35 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 dwell.reset()
                 mouth.reset()
 
+                # 추적이 끊긴 프레임은 고정으로 이어 붙이지 않는다.
+                dwell.update_fixation(
+                    gaze_x,
+                    gaze_y,
+                    (),
+                    valid=False,
+                )
+
+                hovered_target = None
                 hovered_key = None
+                hovered_suggestion_index = None
+                clicked_target = None
                 clicked_key = None
 
                 dwell_ratio = 0.0
                 mouth_click = False
                 mar = 0.0
 
-            # hover 추적(dwell/mouth 공용) - hovered_key가 바뀔 때만 시작
+            # hover 추적(dwell/mouth 공용) - 선택 대상이 바뀔 때만 시작
             # 시각을 새로 찍는다. tap_commit이 발생하면 아래에서 즉시
             # 리셋해 다음 hover 사이클과 섞이지 않게 한다.
-            if hovered_key != hover_start_key:
-                hover_start_key = hovered_key
+            if hovered_target != hover_start_key:
+                hover_start_key = hovered_target
                 hover_start_ts_ms = (
-                    clock.now_ms() if hovered_key is not None else None
+                    clock.now_ms() if hovered_target is not None else None
                 )
 
-            # 기존 드웰 클릭
-            if clicked_key and not mouth_mode:
+            if clicked_target is not None:
+                input_mode = "mouth" if mouth_mode else "dwell"
                 tester.on_key_press()
 
                 pre_tap_button_list = buttonList
@@ -728,103 +840,83 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                     else ""
                 )
 
-                (
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    deleted_count,
-                    inserted_text,
-                ) = process_key(
-                    clicked_key,
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    keyboard_layout
-                )
-
-                log_input_tap(
-                    input_event_logger,
-                    frame_id=frame_id,
-                    input_mode="dwell",
-                    keyboard_layout=keyboard_layout,
-                    key_id=clicked_key,
-                    button_list=pre_tap_button_list,
-                    target_char=pre_tap_target_char,
-                    hover_start_ts_ms=hover_start_ts_ms,
-                    cursor_x=gaze_x,
-                    cursor_y=gaze_y,
-                    deleted_count=deleted_count,
-                    inserted_text=inserted_text,
-                    trigger_signal=None,
-                )
-                hover_start_ts_ms = None
-                hover_start_key = None
-
-            # 입벌림 클릭
-            if (
-                mouth_mode
-                and mouth_click
-                and mouth.selected_key is not None
-            ):
-
-                # 입벌림 전에 미리 잠가둔 키 사용
-                selected_key = mouth.selected_key
-
-                tester.on_key_press()
-
-                pre_tap_button_list = buttonList
-
-                pre_tap_target_char = (
-                    tester.get_target_char(
-                        len(hangul.finalText)
+                if isinstance(clicked_target, SuggestionTarget):
+                    deleted_count, inserted_text = apply_suggestion(
+                        clicked_target.text,
+                        is_korean,
+                        keyboard_layout,
                     )
-                    if tester.active
-                    else ""
-                )
+                    word_boundary_state.mark_pending()
+                    suggestion_state.clear_after_selection(hangul.finalText)
+                    suggestion_context = (
+                        suggestion_state.last_current_text,
+                        suggestion_state.slots,
+                    )
+                    dwell.set_target_context(suggestion_context)
+                    mouth.set_target_context(suggestion_context)
 
-                (
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    deleted_count,
-                    inserted_text,
-                ) = process_key(
-                    selected_key,
-                    is_korean,
-                    is_shift,
-                    buttonList,
-                    keyboard_layout
-                )
+                    log_input_tap(
+                        input_event_logger,
+                        frame_id=frame_id,
+                        input_mode=input_mode,
+                        keyboard_layout=keyboard_layout,
+                        key_id=clicked_target.key_id,
+                        key_label=clicked_target.text,
+                        key_center=(
+                            suggestion_rects[clicked_target.index].center
+                        ),
+                        button_list=pre_tap_button_list,
+                        target_char=pre_tap_target_char,
+                        hover_start_ts_ms=hover_start_ts_ms,
+                        cursor_x=gaze_x,
+                        cursor_y=gaze_y,
+                        deleted_count=deleted_count,
+                        inserted_text=inserted_text,
+                        trigger_signal=(mar if mouth_mode else None),
+                    )
 
-                log_input_tap(
-                    input_event_logger,
-                    frame_id=frame_id,
-                    input_mode="mouth",
-                    keyboard_layout=keyboard_layout,
+                    # 선택한 후보가 같은 프레임에 다시 hover 표시되지 않게 한다.
+                    hovered_target = None
+                    hovered_suggestion_index = None
+                    dwell_ratio = 0.0
+                else:
+                    selected_key = clicked_target
+                    (
+                        is_korean,
+                        is_shift,
+                        buttonList,
+                        deleted_count,
+                        inserted_text,
+                    ) = word_boundary_state.handle_key(
+                        selected_key,
+                        is_korean,
+                        is_shift,
+                        buttonList,
+                        keyboard_layout
+                    )
 
-                    # 현재 hovered_key가 아니라
-                    # 입벌림 전에 잠가둔 키 기록
-                    key_id=selected_key,
+                    log_input_tap(
+                        input_event_logger,
+                        frame_id=frame_id,
+                        input_mode=input_mode,
+                        keyboard_layout=keyboard_layout,
+                        key_id=selected_key,
+                        button_list=pre_tap_button_list,
+                        target_char=pre_tap_target_char,
+                        hover_start_ts_ms=hover_start_ts_ms,
+                        cursor_x=gaze_x,
+                        cursor_y=gaze_y,
+                        deleted_count=deleted_count,
+                        inserted_text=inserted_text,
+                        trigger_signal=(mar if mouth_mode else None),
+                    )
 
-                    button_list=pre_tap_button_list,
-                    target_char=pre_tap_target_char,
-                    hover_start_ts_ms=hover_start_ts_ms,
-
-                    cursor_x=gaze_x,
-                    cursor_y=gaze_y,
-
-                    deleted_count=deleted_count,
-                    inserted_text=inserted_text,
-                    trigger_signal=mar,
-                )
-
+                clicked_key = target_log_id(clicked_target)
                 hover_start_ts_ms = None
                 hover_start_key = None
 
-                print(
-                    "MOUTH INPUT:",
-                    selected_key
-                )
+                if mouth_mode:
+                    print("MOUTH INPUT:", clicked_key)
 
 
             # ── 렌더링 ────────────────────────────────────────
@@ -847,9 +939,79 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 + pending_cheonjiin_text
             )
 
+            if word_boundary_state.pending_word_boundary:
+                suggestion_state.clear_after_selection(current_text)
+                suggestion_update = None
+            else:
+                suggestion_update = suggestion_state.update(current_text)
+            if suggestion_update is not None:
+                print(format_suggestion_update(suggestion_update))
+
+            suggestion_context = (
+                suggestion_state.last_current_text,
+                suggestion_state.slots,
+            )
+            suggestions_changed = dwell.set_target_context(
+                suggestion_context
+            )
+            mouth.set_target_context(suggestion_context)
+            if (
+                suggestions_changed
+                and isinstance(hovered_target, SuggestionTarget)
+            ):
+                hovered_target = None
+                hovered_suggestion_index = None
+                dwell_ratio = 0.0
+                hover_start_ts_ms = None
+                hover_start_key = None
+
             target = tester.target_text if tester.active else None
 
+            locked_suggestion_index = None
+            locked_keyboard_key = None
+            if mouth_mode:
+                if isinstance(mouth.locked_key, SuggestionTarget):
+                    locked_suggestion_index = mouth.locked_key.index
+                else:
+                    locked_keyboard_key = mouth.locked_key
+
+            # ── 고정 감지로 확대할 대상 ──────────────────────
+            # 추천 슬롯과 키캡이 같은 레이어를 쓰므로, 어느 쪽이 확대됐는지에
+            # 따라 그리는 순서를 바꿔 확대된 쪽이 항상 맨 위에 오게 한다.
+            anchor_target = dwell.fixation_hitbox.anchor_target
+            anchor_visual_rect = dwell.fixation_hitbox.anchor_visual_rect()
+
+            expanded_suggestion_index = None
+            expanded_suggestion_rect = None
+            expanded_button = None
+            expanded_button_rect = None
+
+            if anchor_visual_rect is not None:
+                if isinstance(anchor_target, SuggestionSlot):
+                    expanded_suggestion_index = anchor_target.index
+                    expanded_suggestion_rect = anchor_visual_rect
+                else:
+                    expanded_button = anchor_target
+                    expanded_button_rect = anchor_visual_rect
+
+            suggestion_layer = dict(
+                suggestions=suggestion_state.slots,
+                suggestion_rects=suggestion_rects,
+                hovered_index=hovered_suggestion_index,
+                dwell_index=hovered_suggestion_index,
+                dwell_ratio=dwell_ratio,
+                show_cursor=show_cursor,
+                locked_index=locked_suggestion_index,
+                expanded_index=expanded_suggestion_index,
+                expanded_rect=expanded_suggestion_rect,
+            )
+
             kbd_bg = draw_text_area(kbd_bg, current_text, target)
+
+            # 추천이 확대된 프레임에서는 키보드를 먼저 그리고 추천을 그 위에
+            # 얹는다(아래 drawAll 뒤).
+            if expanded_suggestion_index is None:
+                kbd_bg = draw_suggestion_boxes(kbd_bg, **suggestion_layer)
 
             # 테스트 완료 감지
             if tester.check_complete(current_text):
@@ -910,6 +1072,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 hangul.finalText = ""
                 hangul.jamo_buffer[:] = ['', '', '']
                 cheonjiin_composer.reset()
+                word_boundary_state.clear()
 
             if gaze_x < 0 or gaze_y < 0:
                 gaze_x = last_gaze_x
@@ -924,17 +1087,17 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 hovered_key,
                 dwell_ratio,
                 show_cursor,
-                locked_key=(
-                    mouth.locked_key
-                    if mouth_mode
-                    else None
-                ),
+                locked_key=locked_keyboard_key,
 
                 # 고정 감지로 확대해 그릴 키. 판정(히트박스)은 이보다 조금 더
                 # 넓고, 나머지 키의 위치·크기는 그대로 유지된다.
-                expanded_button=dwell.fixation_hitbox.anchor_button,
-                expanded_rect=dwell.fixation_hitbox.anchor_visual_rect(),
+                expanded_button=expanded_button,
+                expanded_rect=expanded_button_rect,
             )
+
+            # 추천이 확대된 프레임은 키보드 위에 추천을 마지막으로 얹는다.
+            if expanded_suggestion_index is not None:
+                kbd_bg = draw_suggestion_boxes(kbd_bg, **suggestion_layer)
 
             if tester.is_showing_complete():
                 kbd_bg = draw_test_complete_overlay(kbd_bg)
@@ -953,7 +1116,7 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 ),
                 gaze_x=gaze_x,
                 gaze_y=gaze_y,
-                hovered_key=hovered_key,
+                hovered_key=target_log_id(hovered_target),
                 dwell_ratio=dwell_ratio,
                 clicked_key=clicked_key,
                 input_text_len=len(current_text),
@@ -1392,6 +1555,8 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                         # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
                         # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
                         backbone_enabled=False,
+                        git_commit=git_commit,
+                        condition_label=condition_label,
 
                         # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
                         calib_id=(
@@ -1475,6 +1640,8 @@ def main(mode=MODE_CALIBRATED,strategy_name=None,keyboard_layout=KEYBOARD_LAYOUT
                 # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
                 # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
                 backbone_enabled=False,
+                git_commit=git_commit,
+                condition_label=condition_label,
             )
             # 9점 테스트가 없었던 실행이므로 __init__이 발급한 test_id는
             # 실제로 일어나지 않은 테스트를 가리키게 된다 — 결측으로 남긴다.
@@ -1525,12 +1692,16 @@ if __name__ == "__main__":
         _mode,
         _strategy_name,
         _keyboard_layout,
-        _user_id
+        _user_id,
+        _condition_label,
+        _calib_points
     ) = parse_args()
 
     main(
         mode=_mode,
         strategy_name=_strategy_name,
         keyboard_layout=_keyboard_layout,
-        user_id=_user_id
+        user_id=_user_id,
+        condition_label=_condition_label,
+        calib_point_count=_calib_points
     )

@@ -16,6 +16,8 @@ def log_input_tap(
     deleted_count,
     inserted_text,
     trigger_signal,
+    key_label=None,
+    key_center=None,
 ):
     """dwell/mouth 훅 공용 - tap_commit 이벤트 한 건을 InputEventLogger에 넘긴다.
 
@@ -26,7 +28,8 @@ def log_input_tap(
     넘겨야 한다 - 이 탭이 실제로 노렸던 목표 문자를 남기려는 것이지,
     이 탭 이후 다음에 쳐야 할 문자를 남기려는 게 아니다.
     """
-    key_center = get_button_center(button_list, key_id)
+    if key_center is None:
+        key_center = get_button_center(button_list, key_id)
     key_center_x, key_center_y = key_center if key_center else (None, None)
 
     hover_to_commit_ms = (
@@ -40,7 +43,11 @@ def log_input_tap(
         input_mode=input_mode,
         keyboard_layout=keyboard_layout,
         key_id=key_id,
-        key_label=DISPLAY_LABELS.get(key_id, key_id),
+        key_label=(
+            key_label
+            if key_label is not None
+            else DISPLAY_LABELS.get(key_id, key_id)
+        ),
         is_backspace=(key_id == "Del"),
         deleted_count=deleted_count,
         inserted_text=inserted_text,
