@@ -52,6 +52,33 @@ def test_performance_dashboard_renders_complete_summary_to_one_screen():
     assert canvas.shape == (SCREEN_H, SCREEN_W, 3)
 
 
+def test_performance_dashboard_renders_skipped_results_without_metrics():
+    summary = {
+        "calibrations": {"completed_count": 3, "fallback_count": 0},
+        "tests": {
+            mode: {
+                "status": "skipped",
+                "target_character": target,
+                "selected_character": None,
+                "success_rate_percent": None,
+                "input_duration_ms": None,
+                "incorrect_attempts": None,
+                "confirmation_attempts": None,
+            }
+            for mode, target in (
+                ("gaze", "물"),
+                ("blink", "밥"),
+                ("mouth", "집"),
+            )
+        },
+        "recommended_input_mode": None,
+    }
+
+    canvas = draw_performance_dashboard(summary)
+
+    assert canvas.shape == (SCREEN_H, SCREEN_W, 3)
+
+
 def test_blink_calibration_screen_renders_existing_ear_progress():
     canvas = draw_blink_calibration_screen(
         "눈을 편하게 뜨세요.",

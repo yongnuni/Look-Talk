@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 import os
 import random
 import statistics
+from typing import Optional
 
 from src.common import clock
 from src.metrics.csv_export import append_rows
@@ -11,6 +12,10 @@ from src.metrics.csv_export import append_rows
 
 INPUT_TEST_CHARACTERS = ("물", "밥", "집")
 INPUT_TEST_ENTRY_LOCK_MS = 350.0
+INPUT_TEST_SKIP_KEY = "s"
+
+INPUT_TEST_STATUS_COMPLETED = "completed"
+INPUT_TEST_STATUS_SKIPPED = "skipped"
 
 GAZE_CALIBRATION = "gaze_calibration"
 GAZE_INPUT_TEST = "gaze_input_test"
@@ -104,20 +109,21 @@ class InputTestAttempt:
 @dataclass(frozen=True)
 class InputMethodTestResult:
     input_mode: str
+    status: str
     target_character: str
-    selected_character: str
-    input_started_at_ms: float
-    selection_completed_at_ms: float
-    input_duration_ms: float
-    confirmation_attempts: int
-    incorrect_attempts: int
-    success_rate_percent: float
+    selected_character: Optional[str]
+    input_started_at_ms: Optional[float]
+    selection_completed_at_ms: Optional[float]
+    input_duration_ms: Optional[float]
+    confirmation_attempts: Optional[int]
+    incorrect_attempts: Optional[int]
+    success_rate_percent: Optional[float]
 
 
 class PerformanceTestFlow:
     """Advance existing calibrators and selectors without owning their logic."""
 
-    SCHEMA_VERSION = "1.0"
+    SCHEMA_VERSION = "1.1"
 
     def __init__(self, run_id, random_source=None):
         self.run_id = run_id
@@ -219,6 +225,7 @@ class PerformanceTestFlow:
         attempts = [a for a in self.attempts if a.input_mode == mode]
         result = InputMethodTestResult(
             input_mode=mode,
+            status=INPUT_TEST_STATUS_COMPLETED,
             target_character=target,
             selected_character=selected_character,
             input_started_at_ms=self._test_started_at_ms,
@@ -230,7 +237,33 @@ class PerformanceTestFlow:
         )
         self.results[mode] = result
         self._test_started_at_ms = None
+        self._advance_from_input_test(mode)
 
+        return attempt
+
+    def skip_current_input_test(self):
+        mode = self.current_input_mode
+        target = self.current_target_character
+        if mode is None or target is None or self._test_started_at_ms is None:
+            return False
+
+        self.results[mode] = InputMethodTestResult(
+            input_mode=mode,
+            status=INPUT_TEST_STATUS_SKIPPED,
+            target_character=target,
+            selected_character=None,
+            input_started_at_ms=None,
+            selection_completed_at_ms=None,
+            input_duration_ms=None,
+            confirmation_attempts=None,
+            incorrect_attempts=None,
+            success_rate_percent=None,
+        )
+        self._test_started_at_ms = None
+        self._advance_from_input_test(mode)
+        return True
+
+    def _advance_from_input_test(self, mode):
         if mode == "gaze":
             self.stage = BLINK_CALIBRATION
         elif mode == "blink":
@@ -238,10 +271,13 @@ class PerformanceTestFlow:
         else:
             self.stage = DASHBOARD
 
-        return attempt
-
     def get_recommended_input_mode(self):
-        completed = [result for result in self.results.values() if result is not None]
+        completed = [
+            result
+            for result in self.results.values()
+            if result is not None
+            and result.status == INPUT_TEST_STATUS_COMPLETED
+        ]
         if not completed:
             return None
 
@@ -398,6 +434,7 @@ class PerformanceTestFlow:
             "schema_version": self.SCHEMA_VERSION,
         }
         for mode, result in self.results.items():
+            summary_row[f"{mode}_status"] = result.status if result else None
             summary_row[f"{mode}_target_character"] = (
                 result.target_character if result else None
             )
@@ -405,10 +442,14 @@ class PerformanceTestFlow:
                 result.selected_character if result else None
             )
             summary_row[f"{mode}_success_rate_percent"] = (
-                round(result.success_rate_percent, 2) if result else None
+                round(result.success_rate_percent, 2)
+                if result and result.success_rate_percent is not None
+                else None
             )
             summary_row[f"{mode}_average_input_time_sec"] = (
-                round(result.input_duration_ms / 1000.0, 3) if result else None
+                round(result.input_duration_ms / 1000.0, 3)
+                if result and result.input_duration_ms is not None
+                else None
             )
             summary_row[f"{mode}_incorrect_attempts"] = (
                 result.incorrect_attempts if result else None

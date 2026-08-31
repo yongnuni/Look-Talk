@@ -86,6 +86,64 @@ def test_flow_reuses_frontend_targets_and_advances_only_after_correct_confirm():
     assert set(flow.targets.values()) == {"물", "밥", "집"}
 
 
+def test_skip_uses_common_transition_and_is_excluded_from_recommendation():
+    flow = PerformanceTestFlow("run-skip", random_source=lambda: 0.0)
+
+    flow.complete_gaze_calibration({"calibration_point_count": 16}, 0)
+    flow.confirm_input("물", 1000)
+
+    flow.complete_blink_calibration({"close_threshold": 0.17}, 2000)
+    assert flow.skip_current_input_test() is True
+    assert flow.stage == MOUTH_CALIBRATION
+    assert flow.results["blink"].status == "skipped"
+    assert flow.results["blink"].success_rate_percent is None
+    assert flow.results["blink"].input_duration_ms is None
+
+    flow.complete_mouth_calibration({"open_threshold": 0.4}, 3000)
+    flow.confirm_input("집", 5000)
+
+    assert flow.stage == DASHBOARD
+    assert flow.get_recommended_input_mode() == "gaze"
+    assert flow.get_dashboard_summary()["tests"]["blink"]["status"] == "skipped"
+
+
+def test_all_input_tests_can_be_skipped_without_creating_failure_metrics(tmp_path):
+    flow = PerformanceTestFlow("run-all-skipped", random_source=lambda: 0.0)
+
+    flow.complete_gaze_calibration({"calibration_point_count": 16}, 0)
+    assert flow.skip_current_input_test() is True
+    assert flow.stage == BLINK_CALIBRATION
+
+    flow.complete_blink_calibration({"close_threshold": 0.17}, 1000)
+    assert flow.skip_current_input_test() is True
+    assert flow.stage == MOUTH_CALIBRATION
+
+    flow.complete_mouth_calibration({"open_threshold": 0.4}, 2000)
+    assert flow.skip_current_input_test() is True
+    assert flow.stage == DASHBOARD
+    assert flow.get_recommended_input_mode() is None
+    assert flow.skip_current_input_test() is False
+
+    assert flow.export_results(
+        keyboard_layout="qwerty",
+        user_id="tester",
+        t0_utc="2026-01-01T00:00:00Z",
+        output_dir=str(tmp_path),
+    )
+    with open(
+        tmp_path / "performance_flow_summary_v1.1.csv",
+        newline="",
+        encoding="utf-8-sig",
+    ) as handle:
+        summary = next(csv.DictReader(handle))
+
+    assert summary["recommended_input_mode"] == ""
+    for mode in ("gaze", "blink", "mouth"):
+        assert summary[f"{mode}_status"] == "skipped"
+        assert summary[f"{mode}_success_rate_percent"] == ""
+        assert summary[f"{mode}_average_input_time_sec"] == ""
+
+
 def test_results_export_required_attempt_fields_and_summary(tmp_path):
     flow = PerformanceTestFlow("run-export", random_source=lambda: 0.0)
     flow.complete_gaze_calibration({"calibration_point_count": 16}, 0)
@@ -107,7 +165,7 @@ def test_results_export_required_attempt_fields_and_summary(tmp_path):
     ) is False
 
     with open(
-        tmp_path / "input_method_test_results_v1.0.csv",
+        tmp_path / "input_method_test_results_v1.1.csv",
         newline="",
         encoding="utf-8-sig",
     ) as handle:
@@ -125,7 +183,7 @@ def test_results_export_required_attempt_fields_and_summary(tmp_path):
     } <= set(rows[0])
 
     with open(
-        tmp_path / "performance_flow_summary_v1.0.csv",
+        tmp_path / "performance_flow_summary_v1.1.csv",
         newline="",
         encoding="utf-8-sig",
     ) as handle:
@@ -133,3 +191,4 @@ def test_results_export_required_attempt_fields_and_summary(tmp_path):
 
     assert summary["recommended_input_mode"] == "gaze"
     assert summary["stb01_fps"] == "30.0"
+    assert summary["gaze_status"] == "completed"
