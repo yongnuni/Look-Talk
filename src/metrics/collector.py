@@ -153,6 +153,37 @@ class MetricsCollector:
         if gaze_valid:
             self._current["gaze_valid_frames"] += 1
 
+    def get_current_frame_quality(self):
+        """현재 측정 구간의 기존 STB-01~04 실행 품질 값을 반환한다.
+
+        대시보드가 ``end_target()``으로 9점 정확도 측정을 끝내거나 내부
+        필드를 직접 읽지 않도록 하는 읽기 전용 경계다.
+        """
+        if self._current is None:
+            return {
+                "stb01_fps": None,
+                "stb02_landmark_rate": None,
+                "stb03_face_fail_rate": None,
+                "stb04_dropout_rate": None,
+            }
+
+        current = self._current
+        total = current["total_frames"]
+        face = current["face_detected_frames"]
+        gaze = current["gaze_valid_frames"]
+        return {
+            "stb01_fps": self._compute_fps(current["frame_times"]),
+            "stb02_landmark_rate": (
+                round(face / total, 4) if total > 0 else None
+            ),
+            "stb03_face_fail_rate": (
+                round((total - face) / total, 4) if total > 0 else None
+            ),
+            "stb04_dropout_rate": (
+                round((total - gaze) / total, 4) if total > 0 else None
+            ),
+        }
+
     def add_sample(self, gaze_x, gaze_y, iris_x, iris_y):
         if self._current is None:
             return
