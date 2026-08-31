@@ -14,3 +14,4 @@ gaze_accuracy_results/
 .report/
 .env
 /docs
+dashboard_*.html
