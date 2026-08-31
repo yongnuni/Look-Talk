@@ -1067,7 +1067,13 @@ def draw_test_complete_overlay(img):
     return np.array(img_pil)
  
  
-def draw_text_area(img, current_text, target_text=None):
+def draw_text_area(
+    img,
+    current_text,
+    target_text=None,
+    target_label="목표 문장",
+    input_mode=None,
+):
     """
     상단 입력 문장 영역 렌더링.
 
@@ -1093,9 +1099,10 @@ def draw_text_area(img, current_text, target_text=None):
     text_x = x + int(h * 0.35)
 
     if target_text is not None:
+        mode_text = f"  |  입력 방식: {input_mode}" if input_mode else ""
         draw.text(
             (x, max(0, y - 26)),
-            f"목표 문장 : {target_text}",
+            f"{target_label} : {target_text}{mode_text}",
             font=small_font,
             fill=(22, 163, 74)
         )
@@ -1224,6 +1231,211 @@ def draw_mouth_calibration_screen(
         fill=(150, 150, 150)
     )
 
+    return np.array(img_pil)
+
+
+def draw_blink_calibration_screen(
+    instruction,
+    ear,
+    progress,
+    remaining,
+    current_trial,
+    total_trials,
+):
+    """과거 blink calibration 정책의 진행 상태만 그리는 통합 화면."""
+    canvas = np.zeros(
+        (SCREEN_H, SCREEN_W, 3),
+        dtype=np.uint8
+    )
+
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 220),
+        "눈 깜빡임 캘리브레이션",
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 150),
+        instruction,
+        font=font,
+        fill=(255, 255, 255),
+        anchor="mm"
+    )
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 60),
+        f"EAR: {ear:.3f}",
+        font=small_font,
+        fill=(255, 180, 80),
+        anchor="mm"
+    )
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 - 20),
+        f"회차: {min(current_trial + 1, total_trials)}/{total_trials}",
+        font=small_font,
+        fill=(200, 200, 200),
+        anchor="mm"
+    )
+    draw.text(
+        (SCREEN_W // 2, SCREEN_H // 2 + 20),
+        f"현재 단계 진행률: {progress:.2f}  |  남은 시간: {remaining:.1f}초",
+        font=small_font,
+        fill=(0, 255, 255),
+        anchor="mm"
+    )
+    draw.text(
+        (20, SCREEN_H - 40),
+        "r : 다시하기   q : 종료",
+        font=small_font,
+        fill=(150, 150, 150)
+    )
+    return np.array(img_pil)
+
+
+def _dashboard_text(value, digits=2, suffix=""):
+    if value is None:
+        return "측정값 없음"
+    if isinstance(value, bool):
+        return "예" if value else "아니오"
+    if isinstance(value, (int, float)):
+        return f"{value:.{digits}f}{suffix}"
+    return str(value)
+
+
+def _draw_dashboard_card(draw, rect, title, lines, accent=(37, 99, 235)):
+    x1, y1, x2, y2 = rect
+    draw.rounded_rectangle(
+        rect,
+        radius=16,
+        fill=(255, 255, 255),
+        outline=(220, 225, 232),
+        width=2,
+    )
+    draw.rectangle((x1, y1, x1 + 7, y2), fill=accent)
+    draw.text((x1 + 22, y1 + 14), title, font=small_font, fill=(20, 30, 48))
+    line_y = y1 + 48
+    for line in lines:
+        if line_y > y2 - 24:
+            break
+        draw.text((x1 + 22, line_y), line, font=small_font, fill=(65, 75, 92))
+        line_y += 28
+
+
+def draw_performance_dashboard(summary):
+    """캘리브레이션·실입력·실행 품질 결과를 한 화면에 표시한다."""
+    canvas = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
+    canvas[:] = (244, 246, 249)
+    img_pil = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(img_pil)
+
+    calibrations = summary.get("calibrations", {})
+    gaze = calibrations.get("gaze", {})
+    blink = calibrations.get("blink", {})
+    mouth = calibrations.get("mouth", {})
+    tests = summary.get("tests", {})
+    runtime = summary.get("runtime_quality", {})
+
+    draw.text(
+        (SCREEN_W // 2, 30),
+        "Look-Talk 캘리브레이션 및 입력 성능 결과",
+        font=font,
+        fill=(22, 32, 52),
+        anchor="ma",
+    )
+
+    margin = max(16, int(SCREEN_W * 0.025))
+    gap = max(12, int(SCREEN_W * 0.012))
+    card_w = (SCREEN_W - margin * 2 - gap * 2) // 3
+    row1_top = 86
+    row1_bottom = min(315, int(SCREEN_H * 0.44))
+    row2_top = row1_bottom + 14
+    row2_bottom = min(row2_top + 190, int(SCREEN_H * 0.72))
+
+    gaze_lines = [
+        f"완료 / 포인트: {'예' if gaze else '아니오'} / {_dashboard_text(gaze.get('calibration_point_count'), 0)}",
+        f"재투영 RMSE: {_dashboard_text(gaze.get('calib_reproj_rmse_px'), suffix=' px')}",
+        f"가장자리 / 중앙 오차: {_dashboard_text(gaze.get('edge_mean_reproj_error_px'), suffix=' px')} / {_dashboard_text(gaze.get('center_mean_reproj_error_px'), suffix=' px')}",
+        f"iris 안정성 X / Y: {_dashboard_text(gaze.get('iris_std_x_norm_mean'), 4)} / {_dashboard_text(gaze.get('iris_std_y_norm_mean'), 4)}",
+        f"기존 보정 fallback: {_dashboard_text(gaze.get('calibration_fallback_used'))}",
+    ]
+    blink_lines = [
+        f"뜬 눈 / 감은 눈 EAR: {_dashboard_text(blink.get('open_ear_median'), 3)} / {_dashboard_text(blink.get('closed_ear_median'), 3)}",
+        f"close / open threshold: {_dashboard_text(blink.get('close_threshold'), 3)} / {_dashboard_text(blink.get('open_threshold'), 3)}",
+        f"감은 눈 샘플 회차: {_dashboard_text(blink.get('closed_sample_count'), 0)} / {_dashboard_text(blink.get('total_trials'), 0)}",
+        f"기본값 fallback: {_dashboard_text(blink.get('calibration_failed_fallback'))}",
+    ]
+    mouth_lines = [
+        f"baseline / open MAR: {_dashboard_text(mouth.get('mar_baseline'), 3)} / {_dashboard_text(mouth.get('open_mar'), 3)}",
+        f"open / close threshold: {_dashboard_text(mouth.get('open_threshold'), 3)} / {_dashboard_text(mouth.get('close_threshold'), 3)}",
+        f"성공률 / 일관성: {_dashboard_text(mouth.get('mouth_success_rate') * 100 if mouth.get('mouth_success_rate') is not None else None, suffix='%')} / {_dashboard_text(mouth.get('mouth_consistency'))}",
+        f"초기화 품질: {_dashboard_text(mouth.get('mouth_init_score'))}",
+    ]
+
+    calibration_cards = (
+        ("시선 캘리브레이션 · 안정성", gaze_lines, (37, 99, 235)),
+        ("눈 깜빡임 캘리브레이션", blink_lines, (124, 58, 237)),
+        ("입 벌림 캘리브레이션", mouth_lines, (234, 88, 12)),
+    )
+    for index, (title, lines, accent) in enumerate(calibration_cards):
+        x = margin + index * (card_w + gap)
+        _draw_dashboard_card(
+            draw,
+            (x, row1_top, x + card_w, row1_bottom),
+            title,
+            lines,
+            accent,
+        )
+
+    mode_labels = {"gaze": "시선", "blink": "눈 깜빡임", "mouth": "입 벌림"}
+    for index, mode in enumerate(("gaze", "blink", "mouth")):
+        result = tests.get(mode) or {}
+        lines = [
+            f"목표 / 실제: {result.get('target_character', '-')} / {result.get('selected_character', '-')}",
+            f"성공률: {_dashboard_text(result.get('success_rate_percent'), suffix='%')}",
+            f"평균 입력 시간: {_dashboard_text((result.get('input_duration_ms') / 1000.0) if result.get('input_duration_ms') is not None else None, suffix='초')}",
+            f"오입력 / 확인 횟수: {_dashboard_text(result.get('incorrect_attempts'), 0)} / {_dashboard_text(result.get('confirmation_attempts'), 0)}",
+        ]
+        x = margin + index * (card_w + gap)
+        _draw_dashboard_card(
+            draw,
+            (x, row2_top, x + card_w, row2_bottom),
+            f"{mode_labels[mode]} 입력 테스트",
+            lines,
+            (22, 163, 74),
+        )
+
+    bottom_top = row2_bottom + 14
+    bottom_bottom = SCREEN_H - 24
+    bottom_w = (SCREEN_W - margin * 2 - gap) // 2
+    overall_lines = [
+        f"캘리브레이션 완료: {calibrations.get('completed_count', 0)}/3  |  fallback: {calibrations.get('fallback_count', 0)}",
+        f"FPS: {_dashboard_text(runtime.get('stb01_fps'))}  |  tracking: {_dashboard_text(runtime.get('stb02_landmark_rate') * 100 if runtime.get('stb02_landmark_rate') is not None else None, suffix='%')}",
+        f"얼굴 실패 / gaze dropout: {_dashboard_text(runtime.get('stb03_face_fail_rate') * 100 if runtime.get('stb03_face_fail_rate') is not None else None, suffix='%')} / {_dashboard_text(runtime.get('stb04_dropout_rate') * 100 if runtime.get('stb04_dropout_rate') is not None else None, suffix='%')}",
+    ]
+    recommended = summary.get("recommended_input_mode")
+    recommendation_lines = [
+        f"추천: {mode_labels.get(recommended, '측정값 없음')}",
+        "기준: 확인 성공률이 높은 방식 우선",
+        "동률이면 전체 입력 시간이 짧은 방식 우선",
+        "q : 종료",
+    ]
+    _draw_dashboard_card(
+        draw,
+        (margin, bottom_top, margin + bottom_w, bottom_bottom),
+        "전체 캘리브레이션 품질 · 시스템 성능",
+        overall_lines,
+        (2, 132, 199),
+    )
+    _draw_dashboard_card(
+        draw,
+        (margin + bottom_w + gap, bottom_top, SCREEN_W - margin, bottom_bottom),
+        "추천 입력 방식",
+        recommendation_lines,
+        (220, 38, 38),
+    )
     return np.array(img_pil)
 # ── 독립 타겟팅 정확도 테스트 화면 ─────────────────────────────
 

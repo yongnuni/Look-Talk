@@ -6,7 +6,11 @@ import cv2
 import numpy as np
 
 from src.calibrations.baseline_manager import save_baseline
-from src.tracking.blink import BlinkDetector
+from src.tracking.blink import (
+    BlinkDetector,
+    BlinkSelectionController,
+    average_ear,
+)
 from src.cheonjiin import cheonjiin_composer
 
 import src.hangul as hangul
@@ -46,6 +50,7 @@ from src.tracking.mouth import (
 )
 
 from src.calibrations.mouth_calibration import MouthCalibration
+from src.calibrations.blink_calibration import BlinkCalibration
 from src.tracking.gaze_pipeline import GazePipeline
 from src.tracking.dwell import DwellController
 from src.tracking.head_pose import estimate_head_pose, estimate_sqpnp_headpose
@@ -81,7 +86,9 @@ from src.ui import (
     draw_test_complete_overlay,
     draw_text_area,
     draw_suggestion_boxes,
+    draw_blink_calibration_screen,
     draw_mouth_calibration_screen,
+    draw_performance_dashboard,
     draw_targeting_test_screen,
     draw_targeting_result_screen,
 )
@@ -91,6 +98,15 @@ from tests.targeting_test_runner import TargetingTestRunner
 from src.metrics.collector import MetricsCollector
 from src.vision.preprocessing import auto_brightness
 from src.app.cli import parse_args
+from src.app.performance_flow import (
+    BLINK_CALIBRATION,
+    DASHBOARD,
+    GAZE_CALIBRATION,
+    INPUT_TEST_STAGES,
+    MOUTH_CALIBRATION,
+    PerformanceTestFlow,
+    build_gaze_calibration_result,
+)
 from src.metrics.baseline_history import append_mouth_baseline_history
 from src.metrics.tap_logging import log_input_tap
 from src.recommendation import (
@@ -115,12 +131,21 @@ def main(
     keyboard_layout=KEYBOARD_LAYOUT_QWERTY,
     user_id="yejin",
     condition_label="",
-    calib_point_count=16
+    calib_point_count=16,
+    performance_flow=False,
 ):
     # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
     clock.init()
     run_id = ids.new_run_id()
+
+    if performance_flow and (
+        mode != MODE_CALIBRATED or calib_point_count != 16
+    ):
+        raise ValueError(
+            "통합 성능 플로우는 calibrated 16점 캘리브레이션에서만 "
+            "실행할 수 있습니다."
+        )
 
     suggestion_engine = initialize_recommender()
     suggestion_state = SuggestionStateController()
@@ -202,11 +227,22 @@ def main(
         mapper.calibrator.set_run_id(run_id)
 
     mouth_calibrator = MouthCalibration()
+    blink_calibrator = BlinkCalibration()
     gaze = GazePipeline()
     dwell = DwellController()
     mouth = MouthClickDetector()
+    blink_selection = BlinkSelectionController()
     word_boundary_state = PendingWordBoundaryState()
     tester = TestRunner(run_id=run_id)
+    performance_test_flow = (
+        PerformanceTestFlow(run_id=run_id)
+        if performance_flow
+        else None
+    )
+    if performance_test_flow is not None:
+        # 문장 테스트는 같은 실제 키 입력 경로의 기존 자산이지만, 통합
+        # 플로우에서는 한 글자 target/채점을 orchestration이 맡는다.
+        tester.active = False
 
     targeting_runner = TargetingTestRunner(
         screen_w=SCREEN_W,
@@ -219,6 +255,7 @@ def main(
     targeting_mode = False
 
     collector = None
+    performance_metrics = None
     session_exported = False
     blink_detector = BlinkDetector(
         detect_natural=True,
@@ -243,6 +280,24 @@ def main(
 
     input_event_logger = InputEventLogger(run_id=run_id)
 
+    if performance_test_flow is not None:
+        performance_metrics = MetricsCollector(
+            user_id=user_id,
+            run_id=run_id,
+            keyboard_layout=keyboard_layout,
+            config_hash=config_hash,
+            config_json=config_json,
+            t0_utc=clock.t0_utc_iso(),
+            screen_w=SCREEN_W,
+            screen_h=SCREEN_H,
+            monitor_diagonal_inch=MONITOR_DIAGONAL_INCH,
+            ridge_enabled=mapper.calibrator.ridge.sklearn_available(),
+            backbone_enabled=False,
+            git_commit=git_commit,
+            condition_label=condition_label,
+        )
+        performance_metrics.start_target("performance_flow", 0, 0)
+
     last_test_id = None
 
     last_gaze_x = SCREEN_W // 2
@@ -260,6 +315,10 @@ def main(
 
     # main() 재호출 또는 레이아웃 변경 전 실행에서 남은 천지인 후보를 제거한다.
     cheonjiin_composer.reset()
+    if performance_test_flow is not None:
+        hangul.finalText = ""
+        hangul.jamo_buffer[:] = ["", "", ""]
+        word_boundary_state.clear()
 
     if keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN:
         buttonList = create_cheonjiin_buttons()
@@ -343,9 +402,14 @@ def main(
             clicked_key = None
             dwell_ratio = 0.0
             mar = 0.0
+            ear = 0.0
             blink_event = None
+            blink = False
+            lms = None
+            tracking_valid = False
 
             mapping_result = None
+            screen_coord_valid = False
             sx = None
             sy = None
 
@@ -366,6 +430,94 @@ def main(
                 "face_center_y": 0.5,
             }
             sqpnp_headpose = dict(head_pose)
+
+            # 기존 gaze Calibrator가 완료된 순간 공개된 측정값만 다음 단계로
+            # 넘긴다. 캘리브레이션 계산 자체는 변경하지 않는다.
+            if (
+                performance_test_flow is not None
+                and performance_test_flow.stage == GAZE_CALIBRATION
+                and mapper.ready
+            ):
+                performance_test_flow.complete_gaze_calibration(
+                    build_gaze_calibration_result(mapper.calibrator)
+                )
+                dwell.reset()
+                mouth.reset()
+                blink_selection.reset()
+                hover_start_ts_ms = None
+                hover_start_key = None
+                print("[performance] 시선 캘리브레이션 완료 → gaze 입력 테스트")
+
+            # 전체 과정 종료 뒤에도 기존 창/카메라 루프는 유지하고 한 화면의
+            # 결과를 표시한다. export는 flow 내부에서 한 번만 수행된다.
+            if (
+                performance_test_flow is not None
+                and performance_test_flow.stage == DASHBOARD
+            ):
+                runtime_quality = performance_metrics.get_current_frame_quality()
+                performance_test_flow.export_results(
+                    keyboard_layout=keyboard_layout,
+                    user_id=user_id,
+                    t0_utc=clock.t0_utc_iso(),
+                    runtime_quality=runtime_quality,
+                )
+                dashboard = draw_performance_dashboard(
+                    performance_test_flow.get_dashboard_summary(runtime_quality)
+                )
+                cv2.imshow("Eye Keyboard", dashboard)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+                continue
+
+            performance_stage_at_frame_start = (
+                performance_test_flow.stage
+                if performance_test_flow is not None
+                else None
+            )
+
+            # 얼굴 landmark가 없을 때는 화면만 유지하고 캘리브레이션 샘플은
+            # 추가하지 않는다.
+            if (
+                performance_test_flow is not None
+                and not results.multi_face_landmarks
+                and performance_test_flow.stage == BLINK_CALIBRATION
+            ):
+                blink_canvas = draw_blink_calibration_screen(
+                    blink_calibrator.get_instruction(),
+                    ear,
+                    blink_calibrator.get_progress(),
+                    blink_calibrator.get_remaining_time(),
+                    blink_calibrator.current_trial_index,
+                    blink_calibrator.total_trials,
+                )
+                cv2.imshow("Eye Keyboard", blink_canvas)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                if key == ord('r'):
+                    blink_calibrator.reset()
+                    blink_selection.reset()
+                continue
+
+            if (
+                performance_test_flow is not None
+                and not results.multi_face_landmarks
+                and performance_test_flow.stage == MOUTH_CALIBRATION
+            ):
+                mouth_canvas = draw_mouth_calibration_screen(
+                    mouth_calibrator.get_instruction(),
+                    mar,
+                    0.0,
+                    mouth_calibrator.get_remaining_time(),
+                )
+                cv2.imshow("Eye Keyboard", mouth_canvas)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                if key == ord('r'):
+                    mouth_calibrator.reset()
+                    mouth.reset()
+                continue
 
             # 얼굴 미검출 프레임에도 캘리브레이션 화면 유지 (깜빡임 방지)
             # no_calibration 모드는 mapper.ready가 항상 True라 이 블록에
@@ -409,6 +561,7 @@ def main(
                 iris_x, iris_y = get_avg_iris(lms)
                 blink_event = blink_detector.update(lms)
                 blink = blink_detector.is_closed
+                ear = average_ear(lms)
                 conf = iris_confidence(lms)                
                 
                 # 캘리브레이션 단계에서도 릿지 학습용 특징을 쌓아야 하므로
@@ -447,8 +600,60 @@ def main(
                         mapper.reset()
 
                     continue
+
+                # ── 눈 깜빡임 캘리브레이션 (통합 플로우) ───────
+                if (
+                    performance_test_flow is not None
+                    and performance_test_flow.stage == BLINK_CALIBRATION
+                ):
+                    blink_progress = blink_calibrator.update(ear)
+
+                    if blink_calibrator.done:
+                        blink_result = blink_calibrator.get_result_dict()
+                        blink_detector = BlinkDetector(
+                            close_threshold=blink_result["close_threshold"],
+                            open_threshold=blink_result["open_threshold"],
+                            detect_natural=True,
+                            detect_intentional=True,
+                        )
+                        performance_test_flow.complete_blink_calibration(
+                            blink_result
+                        )
+                        dwell.reset()
+                        mouth.reset()
+                        blink_selection.reset()
+                        hover_start_ts_ms = None
+                        hover_start_key = None
+                        print(
+                            "[performance] blink calibration 완료 → "
+                            "blink 입력 테스트"
+                        )
+
+                    blink_canvas = draw_blink_calibration_screen(
+                        blink_calibrator.get_instruction(),
+                        ear,
+                        blink_progress,
+                        blink_calibrator.get_remaining_time(),
+                        blink_calibrator.current_trial_index,
+                        blink_calibrator.total_trials,
+                    )
+                    cv2.imshow("Eye Keyboard", blink_canvas)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        break
+                    if key == ord('r'):
+                        blink_calibrator.reset()
+                        blink_selection.reset()
+                    continue
+
                 # ── 입벌림 캘리브레이션 ─────────────────────────
-                if mouth_mode and not mouth_calibrator.done:
+                if (
+                    (mouth_mode and not mouth_calibrator.done)
+                    or (
+                        performance_test_flow is not None
+                        and performance_test_flow.stage == MOUTH_CALIBRATION
+                    )
+                ):
                     mar = mouth_aspect_ratio(lms)
                     mouth_progress = mouth_calibrator.update(mar)
 
@@ -460,7 +665,12 @@ def main(
                         print("====================================\n")
 
                         saved_path = save_baseline(
-                            mouth_result=mouth_result
+                            mouth_result=mouth_result,
+                            blink_result=(
+                                performance_test_flow.blink_result
+                                if performance_test_flow is not None
+                                else None
+                            ),
                         )
 
                         print(f"[baseline] 저장 완료: {saved_path}")
@@ -491,6 +701,16 @@ def main(
 
                         hover_start_ts_ms = None
                         hover_start_key = None
+
+                        if performance_test_flow is not None:
+                            performance_test_flow.complete_mouth_calibration(
+                                mouth_result
+                            )
+                            blink_selection.reset()
+                            print(
+                                "[performance] mouth calibration 완료 → "
+                                "mouth 입력 테스트"
+                            )
 
                     instruction = mouth_calibrator.get_instruction()
                     remaining = mouth_calibrator.get_remaining_time()
@@ -576,6 +796,16 @@ def main(
                             gaze_y
                         )
                 # ── 독립 타겟팅 정확도 테스트 ─────────────────────
+            if (
+                performance_metrics is not None
+                and performance_stage_at_frame_start in INPUT_TEST_STAGES
+            ):
+                performance_metrics.add_frame(
+                    face_detected=bool(results.multi_face_landmarks),
+                    gaze_valid=tracking_valid,
+                    timestamp=time.time(),
+                )
+
             if targeting_mode:
                 targeting_attempt = None
 
@@ -728,27 +958,37 @@ def main(
                 continue
 
             # ── 입력 방식 처리 ─────────────────────────────────
+            # target 생성/채점은 flow가 맡지만 hit-test와 선택은 아래 기존
+            # fixation → dwell/MouthClickDetector 경로를 그대로 사용한다.
+            flow_input_mode = (
+                performance_test_flow.current_input_mode
+                if performance_test_flow is not None
+                else None
+            )
+            active_input_mode = (
+                flow_input_mode
+                if flow_input_mode is not None
+                else ("mouth" if mouth_mode else "gaze")
+            )
+            performance_input_unlocked = (
+                performance_test_flow.is_entry_unlocked()
+                if flow_input_mode is not None
+                else True
+            )
+            active_suggestions = (
+                () if flow_input_mode is not None else suggestion_state.slots
+            )
 
             if tracking_valid:
-                # 이번 프레임의 선택 대상 전체(내용 있는 추천 + 키). 고정
-                # 갱신과 hit-test가 같은 목록을 봐야 확장 한도(서로 1/3)가
-                # 양쪽에 일관되게 걸린다.
                 fixation_targets = build_fixation_targets(
                     suggestion_rects,
-                    suggestion_state.slots,
+                    active_suggestions,
                     buttonList,
                 )
-
-                # 고정 감지형 확장 — hit-test 전에 이번 프레임의 고정 상태를
-                # 먼저 갱신한다. dwell/깜빡임/입벌림 어느 트리거든 아래
-                # hit-test 결과를 그대로 쓰므로 여기 한 번이면 된다.
                 dwell.update_fixation(gaze_x, gaze_y, fixation_targets)
-
-                # 추천 hitbox는 buttonList와 분리한 채, 현재 프레임의 추천/키
-                # 중 하나만 공통 선택 대상으로 만든다.
                 hovered_target = resolve_input_target(
                     suggestion_rects,
-                    suggestion_state.slots,
+                    active_suggestions,
                     buttonList,
                     gaze_x,
                     gaze_y,
@@ -760,26 +1000,26 @@ def main(
                 else:
                     hovered_key = hovered_target
 
-                # =================================================
-                # 입벌림 입력 모드
-                # =================================================
-                if mouth_mode:
-                    # 드웰 입력은 사용하지 않음
+                if not performance_input_unlocked:
                     dwell.reset()
-
+                    mouth.reset()
+                    blink_selection.reset()
+                    clicked_target = None
                     dwell_ratio = 0.0
 
-                    # 실제 클릭은 입벌림으로만 수행
-                    mouth_click, mar = mouth.update(
-                        lms,
-                        hovered_target
-                    )
+                elif active_input_mode == "mouth":
+                    dwell.reset()
+                    dwell_ratio = 0.0
+                    mouth_click, mar = mouth.update(lms, hovered_target)
                     if mouth_click:
                         clicked_target = mouth.selected_key
 
-                # =================================================
-                # 시선 Dwell 입력 모드
-                # =================================================
+                elif active_input_mode == "blink":
+                    dwell.reset()
+                    mouth.reset()
+                    dwell_ratio = 0.0
+                    mar = mouth_aspect_ratio(lms)
+
                 else:
                     (
                         active_target,
@@ -790,54 +1030,70 @@ def main(
                         hovered_target = None
                         hovered_key = None
                         hovered_suggestion_index = None
-
-                    # 시선 입력 모드에서는 입벌림 선택 비활성화
                     mouth.reset()
-
                     mouth_click = False
                     mar = mouth_aspect_ratio(lms)
 
             else:
-
                 dwell.reset()
                 mouth.reset()
-
-                # 추적이 끊긴 프레임은 고정으로 이어 붙이지 않는다.
-                dwell.update_fixation(
-                    gaze_x,
-                    gaze_y,
-                    (),
-                    valid=False,
-                )
-
+                dwell.update_fixation(gaze_x, gaze_y, (), valid=False)
                 hovered_target = None
                 hovered_key = None
                 hovered_suggestion_index = None
                 clicked_target = None
                 clicked_key = None
-
                 dwell_ratio = 0.0
                 mouth_click = False
                 mar = 0.0
 
+            if flow_input_mode == "blink" and performance_input_unlocked:
+                clicked_target = blink_selection.update(
+                    hovered_target,
+                    blink_event,
+                    blink_detector.is_closed,
+                )
+            else:
+                blink_selection.reset()
+
             # hover 추적(dwell/mouth 공용) - 선택 대상이 바뀔 때만 시작
             # 시각을 새로 찍는다. tap_commit이 발생하면 아래에서 즉시
             # 리셋해 다음 hover 사이클과 섞이지 않게 한다.
-            if hovered_target != hover_start_key:
+            preserve_blink_hover = (
+                flow_input_mode == "blink"
+                and blink_detector.is_closed
+                and blink_selection.locked_target is not None
+            )
+            if not preserve_blink_hover and hovered_target != hover_start_key:
                 hover_start_key = hovered_target
                 hover_start_ts_ms = (
                     clock.now_ms() if hovered_target is not None else None
                 )
 
             if clicked_target is not None:
-                input_mode = "mouth" if mouth_mode else "dwell"
-                tester.on_key_press()
+                input_mode = (
+                    flow_input_mode
+                    if flow_input_mode is not None
+                    else ("mouth" if mouth_mode else "dwell")
+                )
+                if performance_test_flow is None:
+                    tester.on_key_press()
+
+                trigger_signal = None
+                if input_mode == "mouth":
+                    trigger_signal = mar
+                elif input_mode == "blink" and blink_event is not None:
+                    trigger_signal = blink_event.duration
 
                 pre_tap_button_list = buttonList
                 pre_tap_target_char = (
-                    tester.get_target_char(len(hangul.finalText))
-                    if tester.active
-                    else ""
+                    performance_test_flow.current_target_character
+                    if flow_input_mode is not None
+                    else (
+                        tester.get_target_char(len(hangul.finalText))
+                        if tester.active
+                        else ""
+                    )
                 )
 
                 if isinstance(clicked_target, SuggestionTarget):
@@ -872,7 +1128,7 @@ def main(
                         cursor_y=gaze_y,
                         deleted_count=deleted_count,
                         inserted_text=inserted_text,
-                        trigger_signal=(mar if mouth_mode else None),
+                        trigger_signal=trigger_signal,
                     )
 
                     # 선택한 후보가 같은 프레임에 다시 hover 표시되지 않게 한다.
@@ -908,14 +1164,66 @@ def main(
                         cursor_y=gaze_y,
                         deleted_count=deleted_count,
                         inserted_text=inserted_text,
-                        trigger_signal=(mar if mouth_mode else None),
+                        trigger_signal=trigger_signal,
                     )
+
+                    # 채점은 실제 키 파이프라인에서 '확인' 키가 선택된 뒤의
+                    # 조합 문자열만 받는다. 물리 키/마우스 이벤트 경로는 없다.
+                    if (
+                        performance_test_flow is not None
+                        and selected_key == "확인"
+                    ):
+                        pending_text = ""
+                        if (
+                            keyboard_layout == KEYBOARD_LAYOUT_CHEONJIIN
+                            and is_korean
+                        ):
+                            pending_text = cheonjiin_composer.get_pending_preview()
+                        submitted_text = (
+                            hangul.finalText
+                            + hangul.compose_jamo_buffer()
+                            + pending_text
+                        )
+                        input_attempt = performance_test_flow.confirm_input(
+                            submitted_text
+                        )
+                        if input_attempt is not None:
+                            print(
+                                f"[performance][{input_mode}] "
+                                f"target={input_attempt.target_character!r}, "
+                                f"selected={input_attempt.selected_character!r}, "
+                                f"success={input_attempt.success}, "
+                                f"duration_ms={input_attempt.input_duration_ms:.1f}"
+                            )
+
+                        if input_attempt is not None and input_attempt.success:
+                            hangul.finalText = ""
+                            hangul.jamo_buffer[:] = ["", "", ""]
+                            cheonjiin_composer.reset()
+                            word_boundary_state.clear()
+                            suggestion_state.clear_after_selection("")
+                            suggestion_context = (
+                                suggestion_state.last_current_text,
+                                suggestion_state.slots,
+                            )
+                            dwell.set_target_context(suggestion_context)
+                            mouth.set_target_context(suggestion_context)
+                            dwell.reset()
+                            mouth.reset()
+                            blink_selection.reset()
+                            hover_start_ts_ms = None
+                            hover_start_key = None
+
+                            if performance_test_flow.stage == BLINK_CALIBRATION:
+                                blink_calibrator.reset()
+                            elif performance_test_flow.stage == MOUTH_CALIBRATION:
+                                mouth_calibrator.reset()
 
                 clicked_key = target_log_id(clicked_target)
                 hover_start_ts_ms = None
                 hover_start_key = None
 
-                if mouth_mode:
+                if input_mode == "mouth":
                     print("MOUTH INPUT:", clicked_key)
 
 
@@ -939,7 +1247,10 @@ def main(
                 + pending_cheonjiin_text
             )
 
-            if word_boundary_state.pending_word_boundary:
+            if flow_input_mode is not None:
+                suggestion_state.clear_after_selection(current_text)
+                suggestion_update = None
+            elif word_boundary_state.pending_word_boundary:
                 suggestion_state.clear_after_selection(current_text)
                 suggestion_update = None
             else:
@@ -947,9 +1258,12 @@ def main(
             if suggestion_update is not None:
                 print(format_suggestion_update(suggestion_update))
 
+            visible_suggestions = (
+                () if flow_input_mode is not None else suggestion_state.slots
+            )
             suggestion_context = (
                 suggestion_state.last_current_text,
-                suggestion_state.slots,
+                visible_suggestions,
             )
             suggestions_changed = dwell.set_target_context(
                 suggestion_context
@@ -965,15 +1279,24 @@ def main(
                 hover_start_ts_ms = None
                 hover_start_key = None
 
-            target = tester.target_text if tester.active else None
+            target = (
+                performance_test_flow.current_target_character
+                if flow_input_mode is not None
+                else (tester.target_text if tester.active else None)
+            )
 
             locked_suggestion_index = None
             locked_keyboard_key = None
-            if mouth_mode:
+            if active_input_mode == "mouth":
                 if isinstance(mouth.locked_key, SuggestionTarget):
                     locked_suggestion_index = mouth.locked_key.index
                 else:
                     locked_keyboard_key = mouth.locked_key
+            elif active_input_mode == "blink":
+                if isinstance(blink_selection.locked_target, SuggestionTarget):
+                    locked_suggestion_index = blink_selection.locked_target.index
+                else:
+                    locked_keyboard_key = blink_selection.locked_target
 
             # ── 고정 감지로 확대할 대상 ──────────────────────
             # 추천 슬롯과 키캡이 같은 레이어를 쓰므로, 어느 쪽이 확대됐는지에
@@ -995,7 +1318,7 @@ def main(
                     expanded_button_rect = anchor_visual_rect
 
             suggestion_layer = dict(
-                suggestions=suggestion_state.slots,
+                suggestions=visible_suggestions,
                 suggestion_rects=suggestion_rects,
                 hovered_index=hovered_suggestion_index,
                 dwell_index=hovered_suggestion_index,
@@ -1006,7 +1329,17 @@ def main(
                 expanded_rect=expanded_suggestion_rect,
             )
 
-            kbd_bg = draw_text_area(kbd_bg, current_text, target)
+            if flow_input_mode is not None:
+                kbd_bg = draw_text_area(
+                    kbd_bg,
+                    current_text,
+                    target,
+                    target_label="목표 글자",
+                    input_mode=flow_input_mode,
+                )
+            else:
+                # 기본 문장 테스트의 기존 렌더 순서/호출 형태 유지.
+                kbd_bg = draw_text_area(kbd_bg, current_text, target)
 
             # 추천이 확대된 프레임에서는 키보드를 먼저 그리고 추천을 그 위에
             # 얹는다(아래 drawAll 뒤).
@@ -1014,7 +1347,10 @@ def main(
                 kbd_bg = draw_suggestion_boxes(kbd_bg, **suggestion_layer)
 
             # 테스트 완료 감지
-            if tester.check_complete(current_text):
+            if (
+                performance_test_flow is None
+                and tester.check_complete(current_text)
+            ):
                 input_metrics = tester.get_input_metrics()
                 print(
                     "입력 시간:",
@@ -1406,14 +1742,28 @@ def main(
                 break
 
             elif key == ord('r'):
-                mapper.reset()
-                gaze.reset()
-
-                if mode == MODE_CALIBRATED:
-                    if not show_countdown(cap, face_mesh):
-                        break
+                if performance_test_flow is not None:
+                    print(
+                        "[performance] 입력 테스트 중 물리 r 키는 무시됩니다. "
+                        "캘리브레이션 화면의 r 키만 현재 단계를 다시 시작합니다."
+                    )
                 else:
-                    print("[mode] no_calibration strategy/gaze 상태를 초기화했습니다.")
+                    mapper.reset()
+                    gaze.reset()
+
+                    if mode == MODE_CALIBRATED:
+                        if not show_countdown(cap, face_mesh):
+                            break
+                    else:
+                        print("[mode] no_calibration strategy/gaze 상태를 초기화했습니다.")
+
+            elif (
+                performance_test_flow is not None
+                and key in (ord('p'), ord('h'), ord('g'), ord('o'))
+            ):
+                print(
+                    "[performance] 측정 중 매핑 방식 변경 키는 무시됩니다."
+                )
 
             elif key == ord('p'):
                 if mode == MODE_CALIBRATED:
@@ -1471,7 +1821,7 @@ def main(
                 show_cursor = not show_cursor
                 print("show_cursor:", show_cursor)
 
-            elif key == ord('m'):
+            elif key == ord('m') and performance_test_flow is None:
 
                 # 입벌림 입력 모드 활성화
                 mouth_mode = True
@@ -1494,7 +1844,7 @@ def main(
                 print("===== 입벌림 캘리브레이션 시작 =====")
                 print()
 
-            elif key == ord('y'):
+            elif key == ord('y') and performance_test_flow is None:
                 cheonjiin_composer.reset()
                 targeting_runner.start()
                 targeting_mode = True
@@ -1512,7 +1862,7 @@ def main(
                 print("====================================")
                 print()
 
-            elif key == ord('t'):
+            elif key == ord('t') and performance_test_flow is None:
 
                  if mode != MODE_CALIBRATED:
                     print("[test] 정확도 테스트는 현재 calibrated 모드에서만 지원됩니다.")
@@ -1694,7 +2044,8 @@ if __name__ == "__main__":
         _keyboard_layout,
         _user_id,
         _condition_label,
-        _calib_points
+        _calib_points,
+        _performance_flow,
     ) = parse_args()
 
     main(
@@ -1703,5 +2054,6 @@ if __name__ == "__main__":
         keyboard_layout=_keyboard_layout,
         user_id=_user_id,
         condition_label=_condition_label,
-        calib_point_count=_calib_points
+        calib_point_count=_calib_points,
+        performance_flow=_performance_flow,
     )

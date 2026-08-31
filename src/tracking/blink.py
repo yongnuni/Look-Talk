@@ -163,3 +163,53 @@ class BlinkDetector:
 
         # natural_max ~ intent_min 사이 데드존 → 의도 모호, 버림
         return None
+
+
+class BlinkSelectionController:
+    """기존 ``BlinkDetector`` 이벤트를 현재 키보드 타깃 선택에 연결한다.
+
+    눈을 감으면 시선 좌표가 흔들리므로 감기 직전 타깃을 잠그고, 의도
+    깜빡임으로 눈을 뜬 프레임에도 같은 타깃을 보고 있을 때만 선택한다.
+    EAR 판정과 타깃 hit-test는 각각 기존 ``BlinkDetector``와 fixation
+    파이프라인이 담당하며 이 클래스는 두 결과를 결합만 한다.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    @property
+    def locked_target(self):
+        return self._locked_target
+
+    def reset(self):
+        self._last_hovered_target = None
+        self._locked_target = None
+        self._was_closed = False
+
+    def update(self, hovered_target, blink_event, is_closed):
+        if is_closed:
+            if not self._was_closed:
+                self._locked_target = self._last_hovered_target
+            self._was_closed = True
+
+            if (
+                blink_event is not None
+                and blink_event.kind == BlinkKind.LONG_CLOSURE
+            ):
+                self._locked_target = None
+            return None
+
+        selected_target = None
+        if (
+            self._was_closed
+            and blink_event is not None
+            and blink_event.kind == BlinkKind.INTENTIONAL
+            and self._locked_target is not None
+            and hovered_target == self._locked_target
+        ):
+            selected_target = self._locked_target
+
+        self._was_closed = False
+        self._locked_target = None
+        self._last_hovered_target = hovered_target
+        return selected_target

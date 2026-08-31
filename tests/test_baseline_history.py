@@ -8,6 +8,7 @@ append_mouth_baseline_history() 스스로 os.makedirs를 호출하는지 확인�
 """
 
 import csv
+import json
 
 import pytest
 
@@ -55,3 +56,18 @@ def test_append_mouth_baseline_history_creates_missing_directory(tmp_path, monke
     assert rows[0]["run_id"] == "run-test"
     assert rows[0]["open_threshold"] == "0.3"
     assert rows[0]["close_threshold"] == "0.2"
+
+
+def test_combined_flow_preserves_blink_and_mouth_in_existing_baseline(tmp_path):
+    baseline_path = tmp_path / "combined" / "baseline.json"
+    save_baseline(
+        mouth_result={"open_threshold": 0.3, "close_threshold": 0.2},
+        blink_result={"close_threshold": 0.17, "open_threshold": 0.21},
+        path=str(baseline_path),
+    )
+
+    with open(baseline_path, encoding="utf-8") as handle:
+        baseline = json.load(handle)
+
+    assert baseline["mouth"]["open_threshold"] == 0.3
+    assert baseline["blink"]["close_threshold"] == 0.17

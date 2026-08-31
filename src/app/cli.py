@@ -85,7 +85,25 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--performance-flow",
+        dest="performance_flow",
+        action="store_true",
+        help=(
+            "16점 시선 캘리브레이션부터 gaze/blink/mouth 실입력 테스트와 "
+            "결과 대시보드까지 통합 성능 플로우로 실행한다."
+        ),
+    )
+
     args = parser.parse_args()
+
+    if args.performance_flow and (
+        args.gaze_mode != MODE_CALIBRATED or args.calib_points != 16
+    ):
+        parser.error(
+            "--performance-flow는 --gaze-mode calibrated 및 "
+            "--calib-points 16에서만 사용할 수 있습니다."
+        )
 
     if args.gaze_mode == MODE_NO_CALIBRATION:
         name = args.strategy or DEFAULT_NO_CALIBRATION_STRATEGY
@@ -102,5 +120,6 @@ def parse_args():
         args.keyboard_layout,
         args.user_id,
         args.condition_label,
-        args.calib_points
+        args.calib_points,
+        args.performance_flow,
     )

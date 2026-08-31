@@ -2,7 +2,7 @@
 
 ## 프로젝트 소개
 
-Look Talk은 웹캠만으로 시선을 추적해 한글을 입력하는 AAC(보완대체의사소통) 키보드입니다. ALS 등 중증 운동장애로 손을 쓰기 어려운 사용자가 별도의 고가 장비 없이 일반 노트북/웹캠 환경에서 의사소통할 수 있게 하는 것이 목표입니다. dwell(응시 유지) 클릭과 입벌림(MAR) 클릭, 두 가지 입력 방식을 지원합니다. 동시에 입력 과정에서 시선 정확도·안정성·타건(tap) 로그 등 평가 지표를 함께 수집해, 입력 방식과 파라미터를 정량적으로 비교·개선하는 것도 이 프로젝트의 핵심 목적입니다.
+Look Talk은 웹캠만으로 시선을 추적해 한글을 입력하는 AAC(보완대체의사소통) 키보드입니다. ALS 등 중증 운동장애로 손을 쓰기 어려운 사용자가 별도의 고가 장비 없이 일반 노트북/웹캠 환경에서 의사소통할 수 있게 하는 것이 목표입니다. dwell(응시 유지), 눈 깜빡임(EAR), 입벌림(MAR) 입력을 지원합니다. 동시에 입력 과정에서 시선 정확도·안정성·타건(tap) 로그 등 평가 지표를 함께 수집해, 입력 방식과 파라미터를 정량적으로 비교·개선하는 것도 이 프로젝트의 핵심 목적입니다.
 
 ## Tech Stack
 
@@ -45,7 +45,7 @@ pip install scikit-learn
 ## 실행 방법
 
 ```powershell
-python main.py [--gaze-mode calibrated|no_calibration] [--strategy 이름] [--keyboard-layout qwerty|cheonjiin] [--user-id 이름] [--condition-label 라벨]
+python main.py [--gaze-mode calibrated|no_calibration] [--strategy 이름] [--keyboard-layout qwerty|cheonjiin] [--user-id 이름] [--condition-label 라벨] [--calib-points 9|16] [--performance-flow]
 ```
 
 | 옵션 | 기본값 | 선택지 | 설명 |
@@ -55,6 +55,18 @@ python main.py [--gaze-mode calibrated|no_calibration] [--strategy 이름] [--ke
 | `--keyboard-layout` | `qwerty` | `qwerty`, `cheonjiin` | 키보드 배열. |
 | `--user-id` | `yejin` | 자유 문자열 | 결과 CSV(`sessions.csv` 등)에 기록될 참가자 식별자. 지정하지 않으면 모든 로그가 `yejin`으로 기록된다. |
 | `--condition-label` | (빈 문자열) | 자유 문자열 | `sessions.csv`에 기록될 실험 조건 라벨(예: `baseline`, `new-smoothing`). 코드를 바꿔가며 실험할 때 `git_commit`(자동 기록)만으로 부족하면 직접 지정한다. |
+| `--calib-points` | `16` | `9`, `16` | 일반 calibrated 실행의 캘리브레이션 점 개수. |
+| `--performance-flow` | 꺼짐 | 플래그 | 16점 gaze calibration → gaze 한 글자 테스트 → blink calibration/test → mouth calibration/test → 결과 대시보드를 자동 진행한다. `calibrated`, 16점에서만 사용할 수 있다. |
+
+### 통합 캘리브레이션·입력 성능 플로우
+
+```powershell
+python main.py --performance-flow --user-id <참가자이름>
+```
+
+목표 글자는 기존 프론트엔드 정책과 같은 `물`, `밥`, `집`에서 입력 방식별로 중복 없이 하나씩 제시한다. 별도 timeout은 없으며, 화면 진입 후 350ms 동안 입력을 잠근다. 추천 슬롯은 비활성화되고, 사용자는 현재 단계의 실제 입력 방식으로 가상키보드의 문자 키와 `확인` 키를 모두 선택해야 한다. 물리 키보드나 마우스로 테스트 성공을 만들 수 없다.
+
+추천 입력 방식은 별도 점수를 만들지 않고 확인 성공률이 높은 방식을 우선하며, 동률이면 전체 입력 시간이 짧은 방식을 선택한다. 완전 동률은 `gaze → blink → mouth` 순서로 결정한다.
 
 ## 키보드 단축키
 
@@ -120,17 +132,20 @@ Look-Talk/
     ├── ui.py                                 # OpenCV+PIL 렌더링 (캘리브레이션 화면, 키보드, 커서, 오버레이 등)
     │
     ├── app/
-    │   └── cli.py                            # CLI 인자 파싱 (parse_args)
+    │   ├── cli.py                            # CLI 인자 파싱 (parse_args)
+    │   └── performance_flow.py               # 기존 calibration/실입력의 순서·결과 orchestration
     │
     ├── vision/
     │   └── preprocessing.py                  # 자동 밝기 보정 (auto_brightness)
     │
     ├── calibrations/
     │   ├── baseline_manager.py               # 입벌림 캘리브레이션 결과 JSON 저장/로드
+    │   ├── blink_calibration.py               # 과거 독립 테스트 정책을 복원한 EAR 캘리브레이션 상태머신
     │   └── mouth_calibration.py              # 입벌림 캘리브레이션 상태머신
     │
     ├── tracking/
     │   ├── calibration.py                    # 16점 홈그래피 학습 + 릿지 회귀 하이브리드 매핑
+    │   ├── blink.py                          # EAR 검출 및 blink target-lock 선택 어댑터
     │   ├── dwell.py                          # 시선 dwell 클릭 판정 (키·추천 공용 update_target, 고정 확장 적용 지점)
     │   ├── eye_tracking.py                   # 홍채 좌표 계산, 눈 깜빡임(EAR) 검출
     │   ├── fixation.py                       # 고정 감지형 히트박스 확장 (I-VT 속도 + I-DT 분산)
@@ -197,7 +212,9 @@ tests/
 | `input_events_v1.0.csv` | `gaze_accuracy_results/` | 키 탭 단위 원시 이벤트 | 상시 (30탭마다 flush) |
 | `targeting_results_v1.0.csv` | `gaze_accuracy_results/` | 원형 타겟팅 테스트 결과 (타깃당 1행) | `y` 테스트 완료 또는 `ESC` 중단 시 |
 | `calibration_quality_v1.4.csv` | `gaze_accuracy_results/` | 캘리브레이션 포인트별 재투영오차 등 | 캘리브레이션(`r`) 완료 시 |
-| `baseline.json` | `calibration_results/` | 입벌림 캘리브레이션 최신 결과 (덮어쓰기) | 입벌림 캘리브레이션 완료 시 |
+| `input_method_test_results_v1.0.csv` | `gaze_accuracy_results/` | 입력 방식별 실제 `확인` 시도(목표/실제 글자, 성공 여부, 시작·완료·소요 시각) | 통합 성능 플로우 완료 시 |
+| `performance_flow_summary_v1.0.csv` | `gaze_accuracy_results/` | calibration/test/STB 품질 및 추천 방식 1행 요약 | 통합 성능 플로우 완료 시 |
+| `baseline.json` | `calibration_results/` | 입벌림 최신 결과, 통합 플로우에서는 blink EAR threshold도 함께 저장 (덮어쓰기) | 입벌림 캘리브레이션 완료 시 |
 | `mouth_baseline_history_v2.0.csv` | `calibration_results/` | 입벌림 캘리브레이션 이력 append | 입벌림 캘리브레이션 완료 시 |
 
 ### 그 외 산출물
