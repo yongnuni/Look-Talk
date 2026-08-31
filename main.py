@@ -75,6 +75,7 @@ from src.keyboard import (
     KEYBOARD_LAYOUT_CHEONJIIN,
 )
 from src.metrics.input_event_logger import InputEventLogger
+from src.metrics.blink_event_logger import BlinkClosureEarTracker, BlinkEventLogger
 
 from src.ui import (
     show_countdown,
@@ -108,7 +109,10 @@ from src.app.performance_flow import (
     PerformanceTestFlow,
     build_gaze_calibration_result,
 )
-from src.metrics.baseline_history import append_mouth_baseline_history
+from src.metrics.baseline_history import (
+    append_blink_baseline_history,
+    append_mouth_baseline_history,
+)
 from src.metrics.tap_logging import log_input_tap
 from src.recommendation import (
     SuggestionStateController,
@@ -263,6 +267,10 @@ def main(
         detect_intentional=True
     )
 
+    # blink_events 로깅용 - 감음 구간 동안의 EAR 최솟값을 추적한다
+    # (src/metrics/blink_event_logger.py의 BlinkClosureEarTracker 참고).
+    blink_closure_ear = BlinkClosureEarTracker()
+
     is_korean = True
     is_shift = False
     show_all_markers = False   # b 키로 토글: 후보 좌표를 동시에 마커로 표시
@@ -280,6 +288,7 @@ def main(
     )
 
     input_event_logger = InputEventLogger(run_id=run_id)
+    blink_event_logger = BlinkEventLogger(run_id=run_id)
 
     if performance_test_flow is not None:
         performance_metrics = MetricsCollector(
@@ -579,7 +588,9 @@ def main(
                 blink_event = blink_detector.update(lms)
                 blink = blink_detector.is_closed
                 ear = average_ear(lms)
-                conf = iris_confidence(lms)                
+                ear_at_close = blink_closure_ear.observe(blink, ear)
+                blink_event_logger.log_event(blink_event, ear_at_close)
+                conf = iris_confidence(lms)
                 
                 # 캘리브레이션 단계에서도 릿지 학습용 특징을 쌓아야 하므로
                 # calibrator.done 여부와 무관하게 여기서 계산합니다.
@@ -695,6 +706,11 @@ def main(
                         append_mouth_baseline_history(
                             run_id,
                             saved_path
+                        )
+                        append_blink_baseline_history(
+                            run_id,
+                            saved_path,
+                            user_id,
                         )
 
                         # -----------------------------------------
@@ -2056,6 +2072,7 @@ def main(
     cheonjiin_composer.reset()
     session_logger.close()
     input_event_logger.close()
+    blink_event_logger.close()
 
     cap.release()
     cv2.destroyAllWindows()

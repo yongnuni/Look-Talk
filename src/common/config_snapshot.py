@@ -26,6 +26,10 @@ px_per_cm도 등재하지 않는다 — monitor_diagonal_inch/screen_w/screen_h 
 import hashlib
 import json
 
+from src.app.performance_flow import INPUT_TEST_ENTRY_LOCK_MS
+from src.calibrations.blink_calibration import BlinkCalibration
+from src.tracking.blink import BlinkDetector
+
 from src.config import (
     SMOOTH_ALPHA,
     DWELL_SEC,
@@ -54,6 +58,13 @@ from src.config import (
     RIDGE_ALPHA,
     RIDGE_DEGREE,
 )
+
+
+# blink 기본값은 각 클래스의 __init__ 기본 인자로만 존재하고 모듈 상수가
+# 아니라서, 값을 리터럴로 복제하는 대신 인자 없이 만든 인스턴스의 속성을
+# 그대로 읽는다 — 두 클래스 모두 카메라/파일 접근 없이 상태만 초기화한다.
+_blink_calibration_defaults = BlinkCalibration()
+_blink_detector_defaults = BlinkDetector()
 
 
 def build_snapshot():
@@ -109,6 +120,31 @@ def build_snapshot():
         "targeting_dwell_sec": 1.0,           # main.py:552 (TargetingTestRunner 호출부)
         "targeting_timeout_sec": 5.0,         # main.py:553 (TargetingTestRunner 호출부)
         "targeting_prepare_sec": 2.0,         # tests/targeting_test_runner.py:42 (클래스 기본값 — main.py 호출부는 이 인자를 넘기지 않는다)
+
+        # ── blink 캘리브레이션/검출 기본값 (docs/cali_review.md 2절 갭 반영) ──
+        # 리터럴을 복제하지 않고 인자 없이 만든 인스턴스 속성을 그대로 읽는다.
+        "blink_calib_total_trials": _blink_calibration_defaults.total_trials,
+        "blink_calib_open_collect_sec": (
+            _blink_calibration_defaults.open_collect_sec
+        ),
+        "blink_calib_open_min_samples": (
+            _blink_calibration_defaults.open_min_samples
+        ),
+        "blink_calib_blink_window_sec": (
+            _blink_calibration_defaults.blink_window_sec
+        ),
+        "blink_calib_rest_sec": _blink_calibration_defaults.rest_sec,
+        "blink_default_close_threshold": (
+            _blink_calibration_defaults.default_close_threshold
+        ),
+        "blink_default_open_threshold": (
+            _blink_calibration_defaults.default_open_threshold
+        ),
+        "blink_natural_max_sec": _blink_detector_defaults.natural_max_sec,
+        "blink_intent_min_sec": _blink_detector_defaults.intent_min_sec,
+        "blink_intent_max_sec": _blink_detector_defaults.intent_max_sec,
+        "blink_refractory_sec": _blink_detector_defaults.refractory_sec,
+        "input_test_entry_lock_ms": INPUT_TEST_ENTRY_LOCK_MS,
     }
 
 

@@ -212,10 +212,13 @@ tests/
 | `input_events_v1.0.csv` | `gaze_accuracy_results/` | 키 탭 단위 원시 이벤트 | 상시 (30탭마다 flush) |
 | `targeting_results_v1.0.csv` | `gaze_accuracy_results/` | 원형 타겟팅 테스트 결과 (타깃당 1행) | `y` 테스트 완료 또는 `ESC` 중단 시 |
 | `calibration_quality_v1.4.csv` | `gaze_accuracy_results/` | 캘리브레이션 포인트별 재투영오차 등 | 캘리브레이션(`r`) 완료 시 |
-| `input_method_test_results_v1.0.csv` | `gaze_accuracy_results/` | 입력 방식별 실제 `확인` 시도(목표/실제 글자, 성공 여부, 시작·완료·소요 시각) | 통합 성능 플로우 완료 시 |
-| `performance_flow_summary_v1.0.csv` | `gaze_accuracy_results/` | calibration/test/STB 품질 및 추천 방식 1행 요약 | 통합 성능 플로우 완료 시 |
+| `input_method_test_results_v1.1.csv` | `gaze_accuracy_results/` | 입력 방식별 실제 `확인` 시도(목표/실제 글자, 성공 여부, 시작·완료·소요 시각) | 통합 성능 플로우 완료 시 |
+| `performance_flow_summary_v1.1.csv` | `gaze_accuracy_results/` | calibration/test/STB 품질 및 추천 방식 1행 요약 | 통합 성능 플로우 완료 시 |
 | `baseline.json` | `calibration_results/` | 입벌림 최신 결과, 통합 플로우에서는 blink EAR threshold도 함께 저장 (덮어쓰기) | 입벌림 캘리브레이션 완료 시 |
 | `mouth_baseline_history_v2.0.csv` | `calibration_results/` | 입벌림 캘리브레이션 이력 append | 입벌림 캘리브레이션 완료 시 |
+| `blink_baseline_history_v1.0.csv` | `calibration_results/` | 눈 깜빡임 캘리브레이션 이력 append (`baseline.json`은 덮어쓰기라 blink 값이 유실되는 문제 보완) | 통합 성능 플로우에서 입벌림 캘리브레이션 완료 시 |
+
+> **주의 (`input_events_v1.0.csv`)**: `--performance-flow` 실행 중에는 `input_mode` 컬럼이 dwell/mouth 같은 입력 트리거 메커니즘이 아니라 **테스트 phase명**(`gaze`/`blink`/`mouth`)으로 기록된다. gaze phase는 실제로는 dwell 트리거를 그대로 쓰지만 값은 "gaze"로 남고, mouth phase는 자유 입력의 "mouth"와 값이 같아 `target_char`(물/밥/집 여부)로만 구분할 수 있다. 여러 run을 합쳐 트리거 메커니즘 기준으로 집계할 때는 이 차이를 감안해야 한다(자세한 내용은 `docs/cali_review.md` 3절).
 
 ### 그 외 산출물
 

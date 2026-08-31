@@ -106,11 +106,35 @@ def test_build_snapshot_contains_all_registered_keys():
         "max_calib_rmse_px", "mouth_mar_threshold", "mouth_hold_time_sec",
         "cheonjiin_repeat_timeout_sec",
         "targeting_dwell_sec", "targeting_timeout_sec", "targeting_prepare_sec",
+        "blink_calib_total_trials", "blink_calib_open_collect_sec",
+        "blink_calib_open_min_samples", "blink_calib_blink_window_sec",
+        "blink_calib_rest_sec", "blink_default_close_threshold",
+        "blink_default_open_threshold", "blink_natural_max_sec",
+        "blink_intent_min_sec", "blink_intent_max_sec", "blink_refractory_sec",
+        "input_test_entry_lock_ms",
     }
     snapshot = config_snapshot.build_snapshot()
     assert expected_keys <= set(snapshot.keys())
     assert "keyboard_layout" not in snapshot
     assert snapshot["cheonjiin_repeat_timeout_sec"] is None
+
+
+def test_build_snapshot_blink_values_match_class_defaults():
+    # 리터럴을 복제하지 않고 각 클래스의 기본 인스턴스 속성을 그대로 읽는지 확인한다
+    # (docs/cali_review.md 2절 갭 반영).
+    from src.calibrations.blink_calibration import BlinkCalibration
+    from src.tracking.blink import BlinkDetector
+
+    calib_defaults = BlinkCalibration()
+    detector_defaults = BlinkDetector()
+    snapshot = config_snapshot.build_snapshot()
+
+    assert snapshot["blink_calib_total_trials"] == calib_defaults.total_trials
+    assert snapshot["blink_default_close_threshold"] == (
+        calib_defaults.default_close_threshold
+    )
+    assert snapshot["blink_natural_max_sec"] == detector_defaults.natural_max_sec
+    assert snapshot["blink_refractory_sec"] == detector_defaults.refractory_sec
 
 
 def test_build_snapshot_excludes_px_per_cm():

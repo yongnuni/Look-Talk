@@ -14,7 +14,10 @@ import pytest
 
 from src.calibrations.baseline_manager import save_baseline
 from src.common import clock
-from src.metrics.baseline_history import append_mouth_baseline_history
+from src.metrics.baseline_history import (
+    append_blink_baseline_history,
+    append_mouth_baseline_history,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -71,3 +74,62 @@ def test_combined_flow_preserves_blink_and_mouth_in_existing_baseline(tmp_path):
 
     assert baseline["mouth"]["open_threshold"] == 0.3
     assert baseline["blink"]["close_threshold"] == 0.17
+
+
+def test_append_blink_baseline_history_writes_separate_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    baseline_path = tmp_path / "baseline_src" / "baseline.json"
+    saved_path = save_baseline(
+        mouth_result={"open_threshold": 0.3, "close_threshold": 0.2},
+        blink_result={
+            "open_ear_median": 0.31,
+            "closed_ear_median": 0.11,
+            "close_threshold": 0.17,
+            "open_threshold": 0.21,
+            "calibration_failed_fallback": False,
+            "total_trials": 5,
+            "closed_sample_count": 5,
+        },
+        path=str(baseline_path),
+    )
+
+    append_blink_baseline_history(
+        run_id="run-test", saved_path=saved_path, user_id="tester"
+    )
+
+    csv_path = tmp_path / "calibration_results" / "blink_baseline_history_v1.0.csv"
+    assert csv_path.is_file()
+
+    rows = _read_csv_rows(csv_path)
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == "run-test"
+    assert rows[0]["user_id"] == "tester"
+    assert rows[0]["open_ear_median"] == "0.31"
+    assert rows[0]["close_threshold"] == "0.17"
+    assert rows[0]["fallback"] == "False"
+
+    # mouth 이력 파일 스키마는 그대로여야 한다(별도 파일로 분리).
+    mouth_csv_path = (
+        tmp_path / "calibration_results" / "mouth_baseline_history_v2.0.csv"
+    )
+    assert not mouth_csv_path.is_file()
+
+
+def test_append_blink_baseline_history_is_noop_without_blink_result(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    baseline_path = tmp_path / "baseline_src" / "baseline.json"
+    saved_path = save_baseline(
+        mouth_result={"open_threshold": 0.3, "close_threshold": 0.2},
+        path=str(baseline_path),
+    )
+
+    append_blink_baseline_history(
+        run_id="run-test", saved_path=saved_path, user_id="tester"
+    )
+
+    csv_path = tmp_path / "calibration_results" / "blink_baseline_history_v1.0.csv"
+    assert not csv_path.is_file()
