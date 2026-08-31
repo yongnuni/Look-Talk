@@ -102,6 +102,7 @@ from src.app.performance_flow import (
     BLINK_CALIBRATION,
     DASHBOARD,
     GAZE_CALIBRATION,
+    INPUT_TEST_SKIP_KEY,
     INPUT_TEST_STAGES,
     MOUTH_CALIBRATION,
     PerformanceTestFlow,
@@ -332,6 +333,22 @@ def main(
     )
     dwell.set_target_context(initial_suggestion_context)
     mouth.set_target_context(initial_suggestion_context)
+
+    def reset_performance_input_state():
+        hangul.finalText = ""
+        hangul.jamo_buffer[:] = ["", "", ""]
+        cheonjiin_composer.reset()
+        word_boundary_state.clear()
+        suggestion_state.clear_after_selection("")
+        cleared_context = (
+            suggestion_state.last_current_text,
+            suggestion_state.slots,
+        )
+        dwell.set_target_context(cleared_context)
+        mouth.set_target_context(cleared_context)
+        dwell.reset()
+        mouth.reset()
+        blink_selection.reset()
 
     calib_canvas = np.zeros(
         (SCREEN_H, SCREEN_W, 3),
@@ -1197,20 +1214,7 @@ def main(
                             )
 
                         if input_attempt is not None and input_attempt.success:
-                            hangul.finalText = ""
-                            hangul.jamo_buffer[:] = ["", "", ""]
-                            cheonjiin_composer.reset()
-                            word_boundary_state.clear()
-                            suggestion_state.clear_after_selection("")
-                            suggestion_context = (
-                                suggestion_state.last_current_text,
-                                suggestion_state.slots,
-                            )
-                            dwell.set_target_context(suggestion_context)
-                            mouth.set_target_context(suggestion_context)
-                            dwell.reset()
-                            mouth.reset()
-                            blink_selection.reset()
+                            reset_performance_input_state()
                             hover_start_ts_ms = None
                             hover_start_key = None
 
@@ -1336,6 +1340,9 @@ def main(
                     target,
                     target_label="목표 글자",
                     input_mode=flow_input_mode,
+                    hint_text=(
+                        f"{INPUT_TEST_SKIP_KEY} : 현재 테스트 건너뛰기"
+                    ),
                 )
             else:
                 # 기본 문장 테스트의 기존 렌더 순서/호출 형태 유지.
@@ -1740,6 +1747,27 @@ def main(
 
             if key == ord('q'):
                 break
+
+            elif (
+                performance_test_flow is not None
+                and performance_test_flow.is_input_test
+                and key == ord(INPUT_TEST_SKIP_KEY)
+            ):
+                skipped_mode = performance_test_flow.current_input_mode
+                if performance_test_flow.skip_current_input_test():
+                    reset_performance_input_state()
+                    hover_start_ts_ms = None
+                    hover_start_key = None
+
+                    if performance_test_flow.stage == BLINK_CALIBRATION:
+                        blink_calibrator.reset()
+                    elif performance_test_flow.stage == MOUTH_CALIBRATION:
+                        mouth_calibrator.reset()
+
+                    print(
+                        f"[performance][{skipped_mode}] 입력 테스트 건너뜀 → "
+                        f"{performance_test_flow.stage}"
+                    )
 
             elif key == ord('r'):
                 if performance_test_flow is not None:

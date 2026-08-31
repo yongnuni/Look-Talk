@@ -1073,6 +1073,7 @@ def draw_text_area(
     target_text=None,
     target_label="목표 문장",
     input_mode=None,
+    hint_text=None,
 ):
     """
     상단 입력 문장 영역 렌더링.
@@ -1106,6 +1107,14 @@ def draw_text_area(
             font=small_font,
             fill=(22, 163, 74)
         )
+        if hint_text:
+            draw.text(
+                (x + w, max(0, y - 26)),
+                hint_text,
+                font=small_font,
+                fill=(100, 116, 139),
+                anchor="ra",
+            )
 
     bbox = draw.textbbox((0, 0), current_text, font=font)
     text_h = bbox[3] - bbox[1]
@@ -1392,8 +1401,14 @@ def draw_performance_dashboard(summary):
     mode_labels = {"gaze": "시선", "blink": "눈 깜빡임", "mouth": "입 벌림"}
     for index, mode in enumerate(("gaze", "blink", "mouth")):
         result = tests.get(mode) or {}
+        status = result.get("status", "completed") if result else None
+        status_text = {
+            "completed": "완료",
+            "skipped": "테스트 건너뜀 (미측정)",
+        }.get(status, "측정값 없음")
         lines = [
-            f"목표 / 실제: {result.get('target_character', '-')} / {result.get('selected_character', '-')}",
+            f"상태: {status_text}",
+            f"목표 / 실제: {_dashboard_text(result.get('target_character'))} / {_dashboard_text(result.get('selected_character'))}",
             f"성공률: {_dashboard_text(result.get('success_rate_percent'), suffix='%')}",
             f"평균 입력 시간: {_dashboard_text((result.get('input_duration_ms') / 1000.0) if result.get('input_duration_ms') is not None else None, suffix='초')}",
             f"오입력 / 확인 횟수: {_dashboard_text(result.get('incorrect_attempts'), 0)} / {_dashboard_text(result.get('confirmation_attempts'), 0)}",
@@ -1417,7 +1432,7 @@ def draw_performance_dashboard(summary):
     ]
     recommended = summary.get("recommended_input_mode")
     recommendation_lines = [
-        f"추천: {mode_labels.get(recommended, '측정값 없음')}",
+        f"추천: {mode_labels.get(recommended, '추천 불가 (측정 결과 부족)')}",
         "기준: 확인 성공률이 높은 방식 우선",
         "동률이면 전체 입력 시간이 짧은 방식 우선",
         "q : 종료",
