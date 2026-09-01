@@ -23,7 +23,7 @@ MAX_SQPNP_DELTA_PX = 120
 def run_gaze_accuracy_test(
     cap,
     face_mesh,
-    calibrator,
+    mapper,
     gaze,
     collector,
     blink_detector,
@@ -33,7 +33,16 @@ def run_gaze_accuracy_test(
 ):
     os.makedirs("gaze_accuracy_results", exist_ok=True)
 
-    if use_ridge:
+    # no_calibration은 calibrator 자체가 없다(mapper.calibrator 미정의) — 그 경우
+    # raw/pose_corrected/sqpnp_corrected/ridge_hybrid 4-way 계산을 건너뛰고
+    # mapper.map()으로 바로 좌표를 받는다. calibrated 경로의 4-way 계산·선택
+    # 로직은 동작 변경 없이 그대로 유지한다(아래 while 루프 참고).
+    is_no_calibration = mapper.get_metadata().get("mode") == "no_calibration"
+    calibrator = None if is_no_calibration else mapper.calibrator
+
+    if is_no_calibration:
+        mode_name = mapper.active_method
+    elif use_ridge:
         mode_name = "ridge_hybrid"
     elif use_sqpnp_corrected:
         mode_name = "sqpnp_corrected"
@@ -137,76 +146,91 @@ def run_gaze_accuracy_test(
                     frame_width=fw
                 )
 
-                # Raw 좌표
-                raw_sx, raw_sy = calibrator.map_to_screen(
-                    iris_x,
-                    iris_y
-                )
-
                 blink_detector.update(lms)
-                # 머리 자세 보정 좌표
-                corrected_iris_x, corrected_iris_y = (
-                    calibrator.compensate_iris_by_head_pose(
+
+                if is_no_calibration:
+                    mapping_result = mapper.map(
                         iris_x,
                         iris_y,
-                        head_pose
+                        head_pose=head_pose,
+                        features=features,
+                        sqpnp_head_pose=sqpnp_headpose,
                     )
-                )
+                    sx, sy = mapping_result.x, mapping_result.y
 
-                corrected_sx, corrected_sy = calibrator.map_to_screen(
-                    corrected_iris_x,
-                    corrected_iris_y
-                )
-
-                sqpnp_corrected_iris_x, sqpnp_corrected_iris_y = (
-                    calibrator.compensate_iris_by_head_pose(
-                        iris_x,
-                        iris_y,
-                        sqpnp_headpose
-                    )
-                )
-
-                sqpnp_corrected_sx, sqpnp_corrected_sy = calibrator.map_to_screen(
-                    sqpnp_corrected_iris_x,
-                    sqpnp_corrected_iris_y
-                )
-
-                if (
-                    use_sqpnp_corrected
-                    and raw_sx is not None
-                    and raw_sy is not None
-                    and sqpnp_corrected_sx is not None
-                    and sqpnp_corrected_sy is not None
-                ):
-                    sqpnp_delta_x = np.clip(
-                        sqpnp_corrected_sx - raw_sx,
-                        -MAX_SQPNP_DELTA_PX,
-                        MAX_SQPNP_DELTA_PX
-                    )
-                    sqpnp_delta_y = np.clip(
-                        sqpnp_corrected_sy - raw_sy,
-                        -MAX_SQPNP_DELTA_PX,
-                        MAX_SQPNP_DELTA_PX
-                    )
-                    sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
-                    sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
-
-                # ── 릿지 하이브리드 좌표 ──
-                ridge_sx, ridge_sy = calibrator.map_to_screen_features(
-                    features
-                )
-
-                if use_ridge and ridge_sx is not None and ridge_sy is not None:
-                    sx, sy = ridge_sx, ridge_sy
-                elif use_ridge:
-                    # 릿지 실패 프레임은 raw로 폴백 (커서 유지 원칙)
-                    sx, sy = raw_sx, raw_sy
-                elif use_sqpnp_corrected:
-                    sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
-                elif use_pose_corrected:
-                    sx, sy = corrected_sx, corrected_sy
                 else:
-                    sx, sy = raw_sx, raw_sy
+                    # calibrated 경로 — 기존 4-way(raw/pose_corrected/sqpnp_corrected/
+                    # ridge_hybrid) 계산·선택 로직을 동작 변경 없이 그대로 유지한다.
+
+                    # Raw 좌표
+                    raw_sx, raw_sy = calibrator.map_to_screen(
+                        iris_x,
+                        iris_y
+                    )
+
+                    # 머리 자세 보정 좌표
+                    corrected_iris_x, corrected_iris_y = (
+                        calibrator.compensate_iris_by_head_pose(
+                            iris_x,
+                            iris_y,
+                            head_pose
+                        )
+                    )
+
+                    corrected_sx, corrected_sy = calibrator.map_to_screen(
+                        corrected_iris_x,
+                        corrected_iris_y
+                    )
+
+                    sqpnp_corrected_iris_x, sqpnp_corrected_iris_y = (
+                        calibrator.compensate_iris_by_head_pose(
+                            iris_x,
+                            iris_y,
+                            sqpnp_headpose
+                        )
+                    )
+
+                    sqpnp_corrected_sx, sqpnp_corrected_sy = calibrator.map_to_screen(
+                        sqpnp_corrected_iris_x,
+                        sqpnp_corrected_iris_y
+                    )
+
+                    if (
+                        use_sqpnp_corrected
+                        and raw_sx is not None
+                        and raw_sy is not None
+                        and sqpnp_corrected_sx is not None
+                        and sqpnp_corrected_sy is not None
+                    ):
+                        sqpnp_delta_x = np.clip(
+                            sqpnp_corrected_sx - raw_sx,
+                            -MAX_SQPNP_DELTA_PX,
+                            MAX_SQPNP_DELTA_PX
+                        )
+                        sqpnp_delta_y = np.clip(
+                            sqpnp_corrected_sy - raw_sy,
+                            -MAX_SQPNP_DELTA_PX,
+                            MAX_SQPNP_DELTA_PX
+                        )
+                        sqpnp_corrected_sx = int(raw_sx + sqpnp_delta_x)
+                        sqpnp_corrected_sy = int(raw_sy + sqpnp_delta_y)
+
+                    # ── 릿지 하이브리드 좌표 ──
+                    ridge_sx, ridge_sy = calibrator.map_to_screen_features(
+                        features
+                    )
+
+                    if use_ridge and ridge_sx is not None and ridge_sy is not None:
+                        sx, sy = ridge_sx, ridge_sy
+                    elif use_ridge:
+                        # 릿지 실패 프레임은 raw로 폴백 (커서 유지 원칙)
+                        sx, sy = raw_sx, raw_sy
+                    elif use_sqpnp_corrected:
+                        sx, sy = sqpnp_corrected_sx, sqpnp_corrected_sy
+                    elif use_pose_corrected:
+                        sx, sy = corrected_sx, corrected_sy
+                    else:
+                        sx, sy = raw_sx, raw_sy
 
                 blink = blink_detector.is_closed
                 conf = iris_confidence(lms)

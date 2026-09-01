@@ -1908,25 +1908,64 @@ def main(
 
             elif key == ord('t') and performance_test_flow is None:
 
-                 if mode != MODE_CALIBRATED:
-                    print("[test] 정확도 테스트는 현재 calibrated 모드에서만 지원됩니다.")
-
-                 elif mapper.ready:
+                 if mapper.ready:
 
                     gaze.reset()
 
-                    use_pose_corrected = mapper.active_method == "pose_corrected"
-                    use_sqpnp_corrected = mapper.active_method == "sqpnp_corrected"
-                    use_ridge = mapper.active_method == "ridge_hybrid"
+                    if mode == MODE_CALIBRATED:
+                        use_pose_corrected = mapper.active_method == "pose_corrected"
+                        use_sqpnp_corrected = mapper.active_method == "sqpnp_corrected"
+                        use_ridge = mapper.active_method == "ridge_hybrid"
 
-                    if use_ridge:
-                        version_name = "v0.2-ridge-hybrid"
-                    elif use_sqpnp_corrected:
-                        version_name = "v0.1-sqpnp-corrected"
-                    elif use_pose_corrected:
-                        version_name = "v0.1-pose-corrected"
+                        if use_ridge:
+                            version_name = "v0.2-ridge-hybrid"
+                        elif use_sqpnp_corrected:
+                            version_name = "v0.1-sqpnp-corrected"
+                        elif use_pose_corrected:
+                            version_name = "v0.1-pose-corrected"
+                        else:
+                            version_name = f"v0.3-raw-mean{GAZE_AVG_WINDOW}"
+
+                        # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
+                        calib_id = (
+                            mapper.calibrator.last_good_calib_id
+                            if mapper.calibrator.calibration_fallback_used
+                            and mapper.calibrator.last_good_calib_id is not None
+                            else mapper.calibrator.calib_id
+                        )
+                        calib_reproj_rmse_px = mapper.calibrator.calib_reproj_rmse_px
+                        # ridge_enabled: config 값이 아니라 이 프로세스에서 릿지가
+                        # 실제로 활성화됐는지(=sklearn을 import할 수 있었는지)를 담는다.
+                        ridge_enabled = mapper.calibrator.ridge.sklearn_available()
+                        edge_mean_reproj_error_px = mapper.calibrator.edge_mean_reproj_error_px
+                        center_mean_reproj_error_px = mapper.calibrator.center_mean_reproj_error_px
+                        calibration_fallback_used = mapper.calibrator.calibration_fallback_used
+                        rejected_calib_rmse_px = mapper.calibrator.rejected_calib_rmse_px
+                        applied_calib_rmse_px = mapper.calibrator.applied_calib_rmse_px
                     else:
-                        version_name = f"v0.3-raw-mean{GAZE_AVG_WINDOW}"
+                        # no_calibration: calibrator 전용 4-way 보정 방식(raw/pose_corrected/
+                        # sqpnp_corrected/ridge_hybrid)이 없고 mapper.calibrator 자체가
+                        # 없다(NoCalibrationMapper에 정의돼 있지 않음). dev_version에
+                        # "no_calibration-<strategy명>"을 남겨, sessions와 join하지 않아도
+                        # 이 실행이 no_calibration이었음을 sessions.csv에서 바로 식별할 수
+                        # 있게 한다. gaze_accuracy_v{SCHEMA}.csv(canonical)에는 애초에
+                        # mode 컬럼이 없어(collector.py 스키마 미변경) 이 정보가 실리지
+                        # 않으며, run_gaze_accuracy_test()가 함께 만드는 레거시
+                        # gaze_accuracy_{mode_name}_TIMESTAMP.csv 쪽이 파일명·모든 행에
+                        # strategy명을 담아 자기완결적이다.
+                        use_pose_corrected = False
+                        use_sqpnp_corrected = False
+                        use_ridge = False
+                        version_name = f"no_calibration-{mapper.active_method}"
+
+                        calib_id = None
+                        calib_reproj_rmse_px = None
+                        ridge_enabled = None
+                        edge_mean_reproj_error_px = None
+                        center_mean_reproj_error_px = None
+                        calibration_fallback_used = False
+                        rejected_calib_rmse_px = None
+                        applied_calib_rmse_px = None
 
                     # config_hash/config_json은 main() 시작 시점에 이미 계산돼
                     # 있다(앱 실행 시작 시점 안전망 고정 참고) — 여기서는 재사용만 한다.
@@ -1943,51 +1982,30 @@ def main(
                         screen_w=SCREEN_W,
                         screen_h=SCREEN_H,
                         monitor_diagonal_inch=MONITOR_DIAGONAL_INCH,
-                        # ridge_enabled: config 값이 아니라 이 프로세스에서 릿지가
-                        # 실제로 활성화됐는지(=sklearn을 import할 수 있었는지)를 담는다.
-                        ridge_enabled=mapper.calibrator.ridge.sklearn_available(),
+                        ridge_enabled=ridge_enabled,
                         # backbone_enabled: 백본 제거됨(2026-08) — 항상 False 고정.
                         # sessions CSV 스키마 호환을 위해 컬럼 자체는 유지한다.
                         backbone_enabled=False,
                         git_commit=git_commit,
                         condition_label=condition_label,
-
-                        # fallback을 사용했다면 실제 적용된 이전 calib_id 기록
-                        calib_id=(
-                            mapper.calibrator.last_good_calib_id
-                            if mapper.calibrator.calibration_fallback_used
-                            and mapper.calibrator.last_good_calib_id is not None
-                            else mapper.calibrator.calib_id
-                        ),
-
-                        calib_reproj_rmse_px=mapper.calibrator.calib_reproj_rmse_px,
+                        calib_id=calib_id,
+                        calib_reproj_rmse_px=calib_reproj_rmse_px,
                         use_pose_corrected=use_pose_corrected,
                         use_sqpnp_corrected=use_sqpnp_corrected,
                         gaze_avg_window=GAZE_AVG_WINDOW,
                         smoothing_mode="moving_average",
-
-                        edge_mean_reproj_error_px=(
-                            mapper.calibrator.edge_mean_reproj_error_px
-                        ),
-                        center_mean_reproj_error_px=(
-                            mapper.calibrator.center_mean_reproj_error_px
-                        ),
-                        calibration_fallback_used=(
-                            mapper.calibrator.calibration_fallback_used
-                        ),
-                        rejected_calib_rmse_px=(
-                            mapper.calibrator.rejected_calib_rmse_px
-                        ),
-                        applied_calib_rmse_px=(
-                            mapper.calibrator.applied_calib_rmse_px
-                        ),
+                        edge_mean_reproj_error_px=edge_mean_reproj_error_px,
+                        center_mean_reproj_error_px=center_mean_reproj_error_px,
+                        calibration_fallback_used=calibration_fallback_used,
+                        rejected_calib_rmse_px=rejected_calib_rmse_px,
+                        applied_calib_rmse_px=applied_calib_rmse_px,
                     )
 
                     cheonjiin_composer.reset()
                     run_gaze_accuracy_test(
                         cap,
                         face_mesh,
-                        mapper.calibrator,
+                        mapper,
                         gaze,
                         collector,
                         blink_detector,
