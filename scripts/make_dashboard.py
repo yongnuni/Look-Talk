@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
-"""make_dashboard.py v3.0 — 캘리브레이션·초기 입력 측정 리포트
+"""make_dashboard.py v4.0 — 입력 방식 추천 결과 리포트 (일반인용 기본 / 기술 상세 --detail)
 
 사용법 (레포 루트에서, --performance-flow 완주 후):
-    python scripts/make_dashboard.py                  # 최신 완주 세션 자동 선택
+    python scripts/make_dashboard.py                  # 최신 완주 세션 자동 선택 → 일반인용(public) 리포트
     python scripts/make_dashboard.py --run-id e7c0cb9a  # run_id 앞 8자리로 지정
-    python scripts/make_dashboard.py --open           # 생성 직후 브라우저로 열기
-    python scripts/make_dashboard.py --png            # PNG 동시 저장 (선택 의존성)
-출력: dashboard_<run앞8자리>.html (+ --png 시 동명 .png, 기본 2배 해상도) (레포 루트에 생성 — .gitignore에 dashboard_*.html 권장)
+    python scripts/make_dashboard.py --detail          # 기술 지표 매트릭스(EAR/MAR/RMSE/FPS 등) 그대로 렌더
+    python scripts/make_dashboard.py --open            # 생성 직후 브라우저로 열기
+    python scripts/make_dashboard.py --png             # PNG 동시 저장 (선택 의존성)
+출력: dashboard_<run앞8자리>.html (--detail 시 dashboard_<run앞8자리>_detail.html)
+      (+ --png 시 동명 .png, 기본 2배 해상도) (레포 루트에 생성 — .gitignore에 dashboard_*.html 권장)
 의존성: pandas (requirements.txt 포함) · PNG 저장 시에만 playwright 추가 설치
         (pip install playwright && playwright install chromium)
 
@@ -16,6 +18,25 @@
   - DASHBOARD 화면까지 완주해야 summary CSV가 생성됨 (중도 종료 시 이 도구가 세션을 찾지 못함)
 추천 카드는 PerformanceTestFlow.get_recommended_input_mode()와 동일 규칙을 오프라인
 재계산해 저장값과 대조한다. 코드 규칙 변경 시 recommend()도 갱신할 것.
+
+[기본(public) 지표 정의 — 모두 CSV 실측에서 계산, 수기 상수 없음]
+  인식 정확도(m) = 성공 시도 수 / 전체 시도 수 × 100
+      전체 시도 수·성공 시도 수는 input_method_test_results 원시 행에서 집계.
+      summary의 {m}_success_rate_percent와 값이 같아야 하며, 불일치 시 콘솔 경고.
+  오타율(m)      = {m}_incorrect_attempts / 전체 시도 수 × 100  (낮을수록 좋음 → 게이지 색 반전)
+  입력 속도(m)   = min(완료된 모드들의 평균 입력 시간) / {m}_average_input_time_sec × 100
+      완료 모드가 1개뿐이면 그 모드만 100.
+  입력 안정성(m):
+      gaze  = gaze_mean_confidence × 100
+      blink = (blink_open_ear_median − blink_close_threshold)
+              / (blink_open_ear_median − blink_closed_ear_median) × 100   (임계 분리 여유)
+      mouth = (1 − mouth_false_trigger_rate) × mouth_consistency × 100
+  4개 지표 모두, 해당 모드의 1음절 테스트가 완료(completed)되지 않았거나 원시 시도 행이
+  없으면 "측정 안 됨"으로 표기하고 %를 표시하지 않는다(스킵 폴백).
+
+  추천 점수(m, "N점") = 위 4개 지표의 평균. 오타율은 (100 − 오타율)로 반전해
+      "값이 클수록 좋음" 방향으로 통일한 뒤 평균한다(total_score()). 사용자 노출용
+      요약 점수이며, 원인 진단은 아래 '상세 지표' 막대그래프(지표별 값 그대로)로 확인한다.
 """
 import argparse, random, webbrowser
 from pathlib import Path
@@ -26,7 +47,23 @@ BANDS = {"nat_max": 0.25, "int_min": 0.30, "int_max": 0.80}
 GATE_PX = 150.0
 MODES = ["gaze", "blink", "mouth"]
 MODE_KO = {"gaze": "시선", "blink": "깜빡임", "mouth": "입벌림"}
+MODE_SUBTITLE = {
+    "gaze": "화면을 응시하여 입력",
+    "blink": "눈을 깜빡여 입력",
+    "mouth": "입 움직임으로 입력",
+}
+MODE_COLOR = {"gaze": "#4285F4", "blink": "#12B5CB", "mouth": "#34A853"}
+# public 대시보드 전용 모드 명칭(기술 상세 --detail의 MODE_KO/"입벌림" 표기는 유지)
+PUBLIC_MODE_LABEL = {**MODE_KO, "mouth": "입 움직임"}
 COLS = {"c1": "#4285F4", "c2": "#12B5CB", "c3": "#34A853", "c4": "#FA7B17"}
+
+# public 대시보드 행 정의: (지표 key, 라벨, 한 줄 설명, invert(낮을수록 좋음이면 True))
+ROWS = [
+    ("error", "오타율", "잘못 입력한 비율(낮을수록 좋음)", True),
+    ("speed", "입력 속도", "가장 빠른 방식을 100으로 본 상대 속도", False),
+    ("accuracy", "인식 정확도", "의도한 글자가 정확히 입력된 비율", False),
+    ("stability", "입력 안정성", "오작동 없이 일관되게 동작한 정도", False),
+]
 
 def read(p, need=True):
     if not p.exists():
@@ -49,7 +86,107 @@ def recommend(S):
     tied = len({c[0] for c in cand}) == 1
     return best[3], ("확인 성공률 동률 → 소요시간 최단" if tied else "확인 성공률 최상위")
 
-# ── 차트 (셀 폭 250 기준) ─────────────────────────────
+def plain_reason(S, reco, comp):
+    """recommend()의 판정을 일반인이 이해할 수 있는 평문 근거로 옮긴다. 기술 용어 없음."""
+    done = [m for m in MODES if comp[m]]
+    if not done or reco is None:
+        return "완료된 테스트가 없어 추천할 수 없습니다."
+    rates = {m: float(S[f"{m}_success_rate_percent"]) for m in done}
+    top = max(rates.values())
+    tied = [m for m in done if rates[m] == top]
+    if len(tied) == 1:
+        return f"{MODE_KO[reco]} 방식이 가장 정확하게 입력되었습니다."
+    names = "·".join(MODE_KO[m] for m in tied)
+    if len(tied) == len(MODES) and top >= 100:
+        return f"세 방식 모두 정확히 입력했고, {MODE_KO[reco]} 방식이 가장 빨랐습니다."
+    return f"{names} 방식이 똑같이 정확했고, 그중 {MODE_KO[reco]} 방식이 가장 빨랐습니다."
+
+def compute_public_metrics(S, tests, rid, comp):
+    """public 대시보드 4지표 산출. 반환: (metrics[mode][key] -> float|None, warnings, total_attempts[mode]).
+    산출식은 모듈 docstring의 [기본(public) 지표 정의]를 그대로 구현한다.
+    """
+    metrics = {m: {"accuracy": None, "error": None, "speed": None, "stability": None} for m in MODES}
+    warnings = []
+    total_attempts = {m: 0 for m in MODES}
+    tm = None
+    if tests is not None:
+        tm = tests[tests.run_id.astype(str) == rid]
+        for m in MODES:
+            total_attempts[m] = int((tm.input_mode == m).sum())
+
+    for m in MODES:
+        if not comp[m] or total_attempts[m] == 0:
+            continue
+        total = total_attempts[m]
+        success_ct = int(tm[tm.input_mode == m]["success"].astype(bool).sum())
+        accuracy = success_ct / total * 100
+        stored = float(S[f"{m}_success_rate_percent"])
+        if abs(accuracy - stored) > 0.5:
+            warnings.append(
+                f"[경고] {MODE_KO[m]} 인식 정확도 재계산({accuracy:.1f}%)이 저장값({stored:.1f}%)과 불일치"
+            )
+        metrics[m]["accuracy"] = accuracy
+        metrics[m]["error"] = float(S[f"{m}_incorrect_attempts"]) / total * 100
+
+    done_times = {m: float(S[f"{m}_average_input_time_sec"]) for m in MODES if comp[m] and total_attempts[m] > 0}
+    if done_times:
+        fastest = min(done_times.values())
+        for m, t in done_times.items():
+            metrics[m]["speed"] = fastest / t * 100
+
+    if comp["gaze"] and total_attempts["gaze"] > 0:
+        metrics["gaze"]["stability"] = float(S.gaze_mean_confidence) * 100
+    if comp["blink"] and total_attempts["blink"] > 0:
+        denom = float(S.blink_open_ear_median) - float(S.blink_closed_ear_median)
+        if denom > 0:
+            metrics["blink"]["stability"] = (
+                (float(S.blink_open_ear_median) - float(S.blink_close_threshold)) / denom * 100
+            )
+        else:
+            warnings.append("[경고] blink 안정성 계산 불가 (open_ear_median <= closed_ear_median)")
+    if comp["mouth"] and total_attempts["mouth"] > 0:
+        metrics["mouth"]["stability"] = (1 - float(S.mouth_false_trigger_rate)) * float(S.mouth_consistency) * 100
+
+    return metrics, warnings, total_attempts
+
+def total_score(mode_metrics):
+    """'추천 점수' = 4개 상세 지표의 평균. 오타율은 (100-오타율)로 반전해
+    '값이 클수록 좋음' 방향으로 통일한 뒤 평균한다(수기 상수 없음, ROWS 정의 재사용).
+    측정된 지표가 하나도 없으면 None(= '측정 안 됨')."""
+    vals = []
+    for key, _label, _desc, invert in ROWS:
+        pct = mode_metrics[key]
+        if pct is None: continue
+        vals.append((100 - pct) if invert else pct)
+    return sum(vals) / len(vals) if vals else None
+
+# ── public 대시보드 막대 게이지 ─────────────────────────────
+def gauge_color(pct, invert=False):
+    if pct is None: return AXIS
+    v = (100 - pct) if invert else pct
+    if v >= 80: return "#34A853"
+    if v >= 50: return "#F9AB00"
+    return "#EA4335"
+
+def metric_hbars(mode_metrics, w=250, h=140):
+    """모드 1개의 4개 상세 지표를 가로 막대로 표시. x축=퍼센티지(0~100), y축=지표 4종.
+    ROWS 순서(오타율/입력 속도/인식 정확도/입력 안정성) 그대로 사용."""
+    pl = 62; W = w - pl - 38; n = len(ROWS); rh = (h - 8) / n; o = []
+    for i, (key, label, _desc, invert) in enumerate(ROWS):
+        y = 6 + i * rh
+        o.append(f'<text x="{pl-6}" y="{y+rh/2+3:.1f}" font-size="10.5" fill="#3C4043" text-anchor="end">{label}</text>')
+        pct = mode_metrics[key]
+        if pct is None:
+            o.append(f'<rect x="{pl}" y="{y+rh*0.22:.1f}" width="{W:.1f}" height="{rh*0.5:.1f}" rx="3" fill="#F1F3F4"/>')
+            o.append(f'<text x="{pl+8}" y="{y+rh/2+3:.1f}" font-size="9.5" fill="#9AA0A6">측정 안 됨</text>')
+        else:
+            bw = max(0.0, min(100.0, pct)) / 100 * W
+            col = gauge_color(pct, invert)
+            o.append(f'<rect x="{pl}" y="{y+rh*0.22:.1f}" width="{bw:.1f}" height="{rh*0.5:.1f}" rx="3" fill="{col}"/>')
+            o.append(f'<text x="{pl+bw+6:.1f}" y="{y+rh/2+3:.1f}" font-size="10" fill="#3C4043" font-weight="600">{round(pct)}%</text>')
+    return f'<svg viewBox="0 0 {w} {h}" width="100%">' + "".join(o) + "</svg>"
+
+# ── 기술 상세(detail) 차트 (셀 폭 250 기준) ─────────────────────────────
 def vbars(pairs, w=250, h=118, unit="px", gate=None):
     """[(label, v, color)] 세로 막대."""
     cap = max(v for _, v, _ in pairs) * 1.25
@@ -155,31 +292,76 @@ def export_png(html_path, scale=2):
         print("       처음이라면 'playwright install chromium' 실행 여부를 확인하세요.")
         return None
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--results-dir", default="gaze_accuracy_results")
-    ap.add_argument("--calib-dir", default="calibration_results")
-    ap.add_argument("--run-id", default=None)
-    ap.add_argument("--open", action="store_true", help="생성 후 브라우저로 열기")
-    ap.add_argument("--png", action="store_true", help="PNG로도 저장 (playwright 필요)")
-    ap.add_argument("--scale", type=int, default=2, help="PNG 해상도 배율 (기본 2x)")
-    a = ap.parse_args()
-    R = Path(a.results_dir)
+# ── 렌더: public(기본, 일반인용) ─────────────────────────────
+def render_public(S, rid, comp, metrics, reco, reason_text):
+    heads = "".join(
+        f'<div class="phead" style="background:{MODE_COLOR[m]}">'
+        f'<div class="pht">{PUBLIC_MODE_LABEL[m]} 입력</div><div class="phs">{MODE_SUBTITLE[m]}</div></div>'
+        for m in MODES
+    )
+    def score_cell(m):
+        score = total_score(metrics[m])
+        if score is None:
+            return '<div class="pscore na">측정 안 됨</div>'
+        return f'<div class="pscore" style="color:{gauge_color(score)}">{round(score)}<span>점</span></div>'
 
-    S = pick(read(R/"performance_flow_summary_v1.1.csv"), a.run_id)
-    rid = str(S.run_id)
-    bev = read(R/"blink_events_v1.0.csv", need=False)
-    bb = bev[bev.run_id.astype(str) == rid] if bev is not None else pd.DataFrame(columns=["kind", "duration_ms"])
-    ses = read(R/"sessions_v1.9.csv", need=False)
-    meta = {"condition_label": "", "git_commit": ""}
-    if ses is not None:
-        m = ses[ses.run_id.astype(str) == rid]
-        if len(m):
-            clean = lambda v: "" if pd.isna(v) else str(v)
-            meta = {"condition_label": clean(m.iloc[-1].condition_label), "git_commit": clean(m.iloc[-1].git_commit)}
-    reco, reason = recommend(S)
-    cnt = bb.kind.value_counts().to_dict() if len(bb) else {}
-    comp = {m: str(S[f"{m}_status"]) == "completed" for m in MODES}
+    rows_html = '<div class="plabel"><div class="plt">추천 점수</div></div>'
+    rows_html += "".join(f'<div class="pcell">{score_cell(m)}</div>' for m in MODES)
+    rows_html += '<div class="plabel"><div class="plt">상세 지표</div></div>'
+    rows_html += "".join(f'<div class="pcell">{metric_hbars(metrics[m])}</div>' for m in MODES)
+
+    if reco:
+        badge_bg, badge_border, icon = "#E6F4EA", "#34A853", "👍"
+        accent, mode_text = MODE_COLOR[reco], PUBLIC_MODE_LABEL[reco]
+    else:
+        badge_bg, badge_border, icon = "#F1F3F4", "#9AA0A6", "❓"
+        accent, mode_text = "#9AA0A6", "추천 보류"
+
+    return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>Look Talk 입력 방식 추천 결과</title><style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:"Roboto","Noto Sans KR","Malgun Gothic",sans-serif;background:#F8F9FA;color:#202124;max-width:1160px;margin:0 auto;padding-bottom:18px}}
+.appbar{{background:#fff;border-bottom:1px solid #DADCE0;padding:14px 24px;display:flex;align-items:center;gap:14px}}
+.appbar .logo{{font-size:19px;font-weight:700;display:flex;align-items:center;gap:8px}}
+.appbar .logo img{{height:40px;width:auto;display:block;margin:3px}}
+.appbar h1{{font-size:15px;font-weight:500;color:#5F6368}}
+.daterange{{margin-left:auto;border:1px solid #DADCE0;border-radius:4px;padding:6px 12px;font-size:12.5px;color:#3C4043}}
+.filters{{padding:10px 24px;display:flex;gap:8px;flex-wrap:wrap}}
+.fchip{{border:1px solid #DADCE0;border-radius:16px;background:#fff;padding:5px 12px;font-size:12px;color:#3C4043}}
+.fchip b{{color:#1A73E8;font-weight:500}}
+.pgrid{{margin:14px 24px;display:grid;grid-template-columns:220px repeat(3,1fr);border:1px solid #DADCE0;border-radius:10px;overflow:hidden;background:#fff}}
+.pgrid>div{{border-bottom:1px solid #E8EAED;border-right:1px solid #E8EAED}}
+.pcorner{{background:#F8F9FA}}
+.phead{{padding:16px 12px;text-align:center}}
+.pht{{font-size:22px;font-weight:700;color:#fff}}
+.phs{{font-size:11.5px;color:rgba(255,255,255,0.9);margin-top:4px}}
+.plabel{{background:#F8F9FA;padding:14px 18px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}}
+.plt{{font-size:22px;font-weight:700;color:#202124}}
+.pcell{{padding:14px;display:flex;align-items:center;justify-content:center}}
+.pscore{{font-size:55px;font-weight:800;line-height:1;margin:10px}}
+.pscore span{{font-size:16px;font-weight:600;margin-left:2px;color:#5F6368}}
+.pscore.na{{font-size:13px;font-weight:500;color:#9AA0A6}}
+.reco2{{margin:14px 24px;background:#fff;border:1px solid #DADCE0;border-left:7px solid {accent};border-radius:10px;padding:20px 26px;display:flex;align-items:center;gap:22px;box-shadow:0 2px 10px rgba(60,64,67,0.12)}}
+.rbadge{{width:72px;height:72px;border-radius:50%;background:{badge_bg};display:grid;place-items:center;font-size:32px;border:3px solid {badge_border};flex-shrink:0}}
+.rtext{{flex:1}}
+.rlabel{{font-size:12.5px;font-weight:600;color:#5F6368;letter-spacing:.02em}}
+.rmode{{font-size:55px;font-weight:800;color:{accent};line-height:1.15;margin-top:2px}}
+.ractions{{display:flex;flex-direction:column;gap:8px;flex-shrink:0}}
+.abtn{{border:1px solid #1A73E8;color:#1A73E8;border-radius:16px;padding:7px 14px;font-size:15px;font-weight:500;white-space:nowrap}}
+.abtn.ghost{{border-color:#DADCE0;color:#5F6368}}
+</style></head><body>
+<div class="appbar"><div class="logo"><img src="assets/Logo.png" alt="Look Talk"></div><h1>입력 방식 추천 결과</h1>
+<div class="daterange">📅 {str(S.t0_utc)[:10]}</div></div>
+<div class="filters"><span class="fchip">사용자 <b>{S.user_id} ▾</b></span><span class="fchip">세션 <b>{rid[:8]} ▾</b></span></div>
+<div class="reco2">
+<div class="rbadge">{icon}</div>
+<div class="rtext"><div class="rlabel">자동 추천 방식</div><div class="rmode">{mode_text}</div></div>
+<div class="ractions"><span class="abtn ghost">다시 검사하기</span></div>
+</div>
+<div class="pgrid"><div class="pcorner"></div>{heads}{rows_html}</div>
+</body></html>"""
+
+# ── 렌더: detail(기존 기술 매트릭스, --detail 플래그) ─────────────────────────────
+def render_detail(S, rid, bb, cnt, comp, reco, reason, meta):
     n_done = sum(comp.values())
     def sv(x, fmt="{:.1f}", na="—"):
         try:
@@ -227,11 +409,12 @@ def main():
         grid += f'<div class="rail"><div class="ric">{icon}</div><div>{rail}</div></div>'
         grid += "".join(f'<div class="cell">{cells[key][i]}</div>' for i in range(4))
 
-    html = f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>Look Talk 캘리브레이션·초기 측정 리포트</title><style>
+    return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>Look Talk 캘리브레이션·초기 측정 리포트</title><style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:"Roboto","Noto Sans KR","Malgun Gothic",sans-serif;background:#F8F9FA;color:#202124;max-width:1280px;margin:0 auto;padding-bottom:18px}}
 .appbar{{background:#fff;border-bottom:1px solid #DADCE0;padding:14px 24px;display:flex;align-items:center;gap:14px}}
-.appbar .logo{{font-size:19px;font-weight:700}} .appbar .logo i{{color:#4285F4;font-style:normal}}
+.appbar .logo{{font-size:19px;font-weight:700;display:flex;align-items:center;gap:8px}}
+.appbar .logo img{{height:26px;width:auto;display:block}}
 .appbar h1{{font-size:15px;font-weight:500;color:#5F6368}}
 .daterange{{margin-left:auto;border:1px solid #DADCE0;border-radius:4px;padding:6px 12px;font-size:12.5px;color:#3C4043}}
 .filters{{padding:10px 24px;display:flex;gap:8px;flex-wrap:wrap}}
@@ -250,24 +433,71 @@ body{{font-family:"Roboto","Noto Sans KR","Malgun Gothic",sans-serif;background:
 .delta{{font-size:10.5px;color:#137333;margin-top:6px}}
 .mini{{font-size:10px;color:#80868B;margin-top:4px}}
 .reco{{margin:12px 24px 0;background:#fff;border:1px solid #DADCE0;border-radius:8px;padding:16px 20px;display:flex;gap:24px;align-items:center}}
-.reco .rv{{font-size:30px;font-weight:700;color:#137333}} .reco .rr{{font-size:12px;color:#5F6368;line-height:1.75;margin-top:5px}}
+.reco .rv{{font-size:45px;font-weight:700;color:#137333}} .reco .rr{{font-size:12px;color:#5F6368;line-height:1.75;margin-top:5px}}
 .reco h2{{font-size:13.5px;font-weight:500}} .reco .cs{{font-size:11px;color:#5F6368;margin:2px 0 4px}}
 .badge{{width:80px;height:80px;border-radius:50%;background:#E6F4EA;display:grid;place-items:center;font-size:32px;border:3px solid #34A853}}
 .foot{{padding:10px 24px;font-size:10.5px;color:#80868B;line-height:1.7}}
 </style></head><body>
-<div class="appbar"><div class="logo"><i>◎</i> Look Talk</div><h1>캘리브레이션 · 초기 입력 측정 리포트</h1>
+<div class="appbar"><div class="logo"><img src="assets/Logo.png" alt="Look Talk"> Look Talk</div><h1>캘리브레이션 · 초기 입력 측정 리포트</h1>
 <div class="daterange">📅 {str(S.t0_utc)[:10]}</div></div>
 <div class="filters"><span class="fchip">참가자 <b>{S.user_id} ▾</b></span><span class="fchip">세션 <b>{rid[:8]} ▾</b></span>
 <span class="fchip">레이아웃 <b>{S.keyboard_layout} ▾</b></span></div>
 <div class="matrix"><div style="background:#F8F9FA"></div>{grid}</div>
 <div class="reco"><div style="flex:1"><h2>초기 입력 방식 추천 <span class="mini">시스템 추천값: {S.recommended_input_mode}</span></h2>
-<div class="cs">측정 결과 기반 자동 추천 (규칙 기반)</div>
-<div class="rv">{(MODE_KO[reco] + f" ({reco})") if reco else "추천 보류"}</div>
-<div class="rr">판정 규칙(코드 동일): ① 확인 성공률 → ② 소요 시간 → ③ 동률 시 사전 순서 · 근거: {reason}{(" — " + " / ".join(f"{m} {float(S[f'{m}_average_input_time_sec']):.1f}s" for m in MODES if comp[m])) if reco else ""}<br>
-<span style="color:#80868B">사용자가 [변경하기]로 다른 방식을 선택할 수 있습니다</span></div></div>
+<div class="rv">{(MODE_KO[reco] + f" ({reco})") if reco else "추천 보류"}</div></div>
 <div class="badge">👍</div></div>
 </body></html>"""
-    out = f"dashboard_{rid[:8]}.html"
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--results-dir", default="gaze_accuracy_results")
+    ap.add_argument("--calib-dir", default="calibration_results")
+    ap.add_argument("--run-id", default=None)
+    ap.add_argument("--detail", action="store_true", help="기술 지표 매트릭스(EAR/MAR/RMSE/FPS 등) 렌더")
+    ap.add_argument("--open", action="store_true", help="생성 후 브라우저로 열기")
+    ap.add_argument("--png", action="store_true", help="PNG로도 저장 (playwright 필요)")
+    ap.add_argument("--scale", type=int, default=2, help="PNG 해상도 배율 (기본 2x)")
+    a = ap.parse_args()
+    R = Path(a.results_dir)
+
+    S = pick(read(R/"performance_flow_summary_v1.1.csv"), a.run_id)
+    rid = str(S.run_id)
+    bev = read(R/"blink_events_v1.0.csv", need=False)
+    bb = bev[bev.run_id.astype(str) == rid] if bev is not None else pd.DataFrame(columns=["kind", "duration_ms", "ts_ms"])
+    # 대시보드 종속 원칙: 이벤트 로그는 blink 1음절 테스트 구간으로만 한정한다
+    # (16점 캘리브레이션 중 자연 깜빡임·blink 캘리브레이션의 의도적 감음·대시보드 열람 구간 배제)
+    tests = read(R/"input_method_test_results_v1.1.csv", need=False)
+    blink_window = None
+    if tests is not None:
+        tb = tests[(tests.run_id.astype(str) == rid) & (tests.input_mode == "blink")]
+        if len(tb):
+            blink_window = (float(tb.input_started_at_ms.min()), float(tb.selection_completed_at_ms.max()))
+    if blink_window and len(bb):
+        bb = bb[(bb.ts_ms >= blink_window[0]) & (bb.ts_ms <= blink_window[1])]
+    elif len(bb):
+        bb = bb.iloc[0:0]  # 구간 확정 불가(테스트 스킵 등) → 미귀속 이벤트는 표시하지 않음
+    ses = read(R/"sessions_v1.9.csv", need=False)
+    meta = {"condition_label": "", "git_commit": ""}
+    if ses is not None:
+        m = ses[ses.run_id.astype(str) == rid]
+        if len(m):
+            clean = lambda v: "" if pd.isna(v) else str(v)
+            meta = {"condition_label": clean(m.iloc[-1].condition_label), "git_commit": clean(m.iloc[-1].git_commit)}
+    reco, reason = recommend(S)
+    cnt = bb.kind.value_counts().to_dict() if len(bb) else {}
+    comp = {m: str(S[f"{m}_status"]) == "completed" for m in MODES}
+
+    if a.detail:
+        html = render_detail(S, rid, bb, cnt, comp, reco, reason, meta)
+        out = f"dashboard_{rid[:8]}_detail.html"
+    else:
+        metrics, warnings, total_attempts = compute_public_metrics(S, tests, rid, comp)
+        for w in warnings:
+            print(w)
+        reason_text = plain_reason(S, reco, comp)
+        html = render_public(S, rid, comp, metrics, reco, reason_text)
+        out = f"dashboard_{rid[:8]}.html"
+
     Path(out).write_text(html, encoding="utf-8")
     ok = S.recommended_input_mode == reco
     print(f"완료 → {out}  (시스템 추천={S.recommended_input_mode}, 재계산={reco}, 일치={ok})")
