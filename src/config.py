@@ -86,7 +86,7 @@ CALIB_POINTS_9 = [
 CALIB_POINTS = CALIB_POINTS_16
 
 
-SMOOTH_ALPHA = 0.35  # 실측 동작값. 변경 시 시선 안정성 지표 baseline이 달라짐
+SMOOTH_ALPHA = 1.0  # exp(E2): EMA 사실상 무효화 — 파라미터 민감도 실험
 GAZE_AVG_WINDOW = 3
 COUNTDOWN_SEC = 3
 DWELL_SEC = 1.2
