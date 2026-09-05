@@ -4,7 +4,7 @@
 calibration_quality.csv(캘리브레이션 포인트당 1행, 16점/calib_id)를 읽어
 최신 캘리브레이션의 재투영 오차 지도·입력 안정성·수집 품질을 시각화한다.
 
-viz.py(9점 테스트 전용, session_id·px 절대좌표 기준)와는 컬럼명·좌표계·
+viz.py(9점 테스트 전용, test_id·px 절대좌표 기준)와는 컬럼명·좌표계·
 선택 키가 모두 달라 별도 모듈로 분리했다. setup_font()만 viz.py에서 가져온다.
 
 설계 원칙
@@ -169,20 +169,20 @@ def _draw_reproj_map(ax, calib_df):
 def _draw_iris_std_bars(ax, calib_df):
     """캘리브레이션 입력 신호 안정성(STB-12)을 포인트별 막대로 표시한다.
 
-    iris_std_x_px/iris_std_y_px는 이름에 _px가 붙어 있지만 실제로는
-    캘리브레이션 시점 정규화 좌표(0~1) 기준 표준편차다 — gaze_accuracy.csv의
-    동일 이름 컬럼(카메라 프레임 px 기준, STB-10)과 단위가 다른 알려진
-    이슈(CLAUDE.md 참고)라서, 축 라벨에 반드시 "정규화 좌표 기준"을 명시해
-    두 지표가 섞여 비교되지 않도록 한다.
+    calibration_quality.csv의 iris_std_x_norm/iris_std_y_norm은 캘리브레이션
+    시점 정규화 좌표(0~1) 기준 표준편차다 — gaze_accuracy.csv의 iris_std_x_px/
+    iris_std_y_px(카메라 프레임 px 기준, STB-10)와 이름도 단위도 달라, 축
+    라벨에 반드시 "정규화 좌표 기준"을 명시해 두 지표가 섞여 비교되지 않도록
+    한다.
     """
     df = calib_df.sort_values("calib_point_index")
     idx = df["calib_point_index"].astype(int)
     x = np.arange(len(idx))
     width = 0.35
 
-    ax.bar(x - width / 2, df["iris_std_x_px"], width,
+    ax.bar(x - width / 2, df["iris_std_x_norm"], width,
            label="iris_std_x", color="steelblue")
-    ax.bar(x + width / 2, df["iris_std_y_px"], width,
+    ax.bar(x + width / 2, df["iris_std_y_norm"], width,
            label="iris_std_y", color="darkorange")
 
     ax.set_xticks(x)

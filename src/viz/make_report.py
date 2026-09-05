@@ -8,7 +8,7 @@ gaze_accuracy_results/ 의 CSV를 읽어 최근 N세션의
 사용 예 (프로젝트 루트에서 터미널에 입력):
     python -m src.viz.make_report                 # 최근 1세션
     python -m src.viz.make_report -n 3            # 최근 3세션
-    python -m src.viz.make_report --session sessionid   # 특정 세션(앞자리 매칭)
+    python -m src.viz.make_report --session testid       # 특정 세션(test_id 앞자리 매칭)
     python -m src.viz.make_report --calib                # 최신 캘리브레이션 품질 그래프
     python -m src.viz.make_report --calib calibid       # 특정 캘리브레이션(앞자리 매칭)
     python -m src.viz.make_report --calib-trend            # 전체 캘리브레이션 추세 그래프
@@ -26,15 +26,15 @@ import src.viz.viz as viz
 import src.viz.calib_viz as calib_viz
 
 
-def save_session_figures(df, session_id, out_dir):
-    """한 세션의 오차 지도 + 막대그래프를 한 장의 PNG로 저장.
+def save_session_figures(df, test_id, out_dir):
+    """한 세션(test_id 단위)의 오차 지도 + 막대그래프를 한 장의 PNG로 저장.
 
     화면 해상도는 이 세션 자신의 target_x/y_px만으로 역산한다 — 같은
     CSV에 다른 해상도로 측정된 세션이 섞여 있어도 영향받지 않도록.
     """
-    s = viz.get_session(df, session_id)
+    s = viz.get_session(df, test_id)
     screen_w, screen_h = viz.infer_screen_size(s)
-    short = str(session_id)[:8]
+    short = str(test_id)[:8]
 
     fig = viz.plot_session_overview(s, screen_w, screen_h)
     path = os.path.join(out_dir, f"{short}_overview.png")
@@ -55,9 +55,9 @@ def main():
     parser.add_argument("--out", default="report",
                         help="PNG 저장 폴더 (기본: report)")
     parser.add_argument("--session", default=None,
-                        help="특정 세션만 (session_id 앞자리로 매칭)")
+                        help="특정 세션만 (test_id 앞자리로 매칭)")
     parser.add_argument("--exclude", nargs="*", default=None,
-                        help="분석 제외할 session_id 목록 (불량 데이터). --calib/--calib-trend만 "
+                        help="분석 제외할 test_id 목록 (불량 데이터). --calib/--calib-trend만 "
                              "쓰고 세션 관련 플래그가 없으면 세션 리포트가 생략되어 이 옵션은 "
                              "적용되지 않는다.")
     parser.add_argument("--calib", nargs="?", const="latest", default=None,
