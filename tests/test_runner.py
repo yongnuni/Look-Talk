@@ -6,7 +6,7 @@ from tests.test_sentences import TEST_SENTENCES
 
 class TestRunner:
 
-    def __init__(self, run_id=None):
+    def __init__(self, run_id=None, target_text=None):
 
         # run_id: 앱 실행 1회 식별자(main.py 주입). 이 클래스는 자체 CSV
         # 출력이 없어(지표는 MetricsCollector.set_input_metrics()로 전달됨)
@@ -14,8 +14,13 @@ class TestRunner:
         # 1단계 방침에 맞춰 받아만 둔다.
         self.run_id = run_id
 
-        self.target_text = random.choice(
-            TEST_SENTENCES
+        # target_text: 라틴방격 등 조건 상쇄를 위해 문장을 결정적으로
+        # 지정하고 싶을 때 호출자가 넘긴다(R8, main.py --test-sentence 경유).
+        # 생략하면 기존과 동일하게 무작위로 고른다.
+        self.target_text = (
+            target_text
+            if target_text is not None
+            else random.choice(TEST_SENTENCES)
         )
 
         self.session_start = None

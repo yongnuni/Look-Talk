@@ -138,6 +138,8 @@ def main(
     condition_label="",
     calib_point_count=16,
     performance_flow=False,
+    autocomplete="on",
+    test_sentence=None,
 ):
     # 앱 실행 1회의 시계 원점과 식별자를 가장 먼저 고정한다 — 이후 생성되는
     # 모든 수집기가 같은 run_id/시계 기준을 공유해야 하므로 카메라 초기화보다 앞에 둔다.
@@ -152,15 +154,22 @@ def main(
             "실행할 수 있습니다."
         )
 
-    suggestion_engine = initialize_recommender()
     suggestion_state = SuggestionStateController()
-    if suggestion_engine.available:
-        print(
-            "[suggestions] initialized "
-            f"wordfreq={suggestion_engine.wordfreq_count} "
-            f"hospital={suggestion_engine.hospital_count} "
-            f"elapsed_ms={suggestion_engine.initialization_ms:.2f}"
-        )
+    if autocomplete == "off":
+        # 엔진을 초기화하지 않으면 모듈 전역 _default_engine이 None으로
+        # 남아 get_suggestions()가 항상 빈 리스트를 반환한다(1-1 확인 결과).
+        # SuggestionStateController.slots는 이 상태에서도 항상 빈 문자열
+        # 3개짜리 튜플을 유지하므로 추천 슬롯 영역 자체는 그대로 보인다.
+        print(f"[autocomplete] off (condition_label={condition_label})")
+    else:
+        suggestion_engine = initialize_recommender()
+        if suggestion_engine.available:
+            print(
+                "[suggestions] initialized "
+                f"wordfreq={suggestion_engine.wordfreq_count} "
+                f"hospital={suggestion_engine.hospital_count} "
+                f"elapsed_ms={suggestion_engine.initialization_ms:.2f}"
+            )
 
     # 실험 조건 스냅샷: 9점 테스트('t') 여부와 무관하게 sessions 행에는
     # 항상 필요하므로 앱 실행 시작 시점에 1회 고정한다. config.py는 프로세스
@@ -238,7 +247,7 @@ def main(
     mouth = MouthClickDetector()
     blink_selection = BlinkSelectionController()
     word_boundary_state = PendingWordBoundaryState()
-    tester = TestRunner(run_id=run_id)
+    tester = TestRunner(run_id=run_id, target_text=test_sentence)
     performance_test_flow = (
         PerformanceTestFlow(run_id=run_id)
         if performance_flow
@@ -2091,6 +2100,8 @@ if __name__ == "__main__":
         _condition_label,
         _calib_points,
         _performance_flow,
+        _autocomplete,
+        _test_sentence,
     ) = parse_args()
 
     main(
@@ -2101,4 +2112,6 @@ if __name__ == "__main__":
         condition_label=_condition_label,
         calib_point_count=_calib_points,
         performance_flow=_performance_flow,
+        autocomplete=_autocomplete,
+        test_sentence=_test_sentence,
     )

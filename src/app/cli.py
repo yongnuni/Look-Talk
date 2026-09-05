@@ -6,6 +6,46 @@ from src.tracking.mappers.factory import (
 )
 from src.tracking.mappers.strategies import available_strategies
 from src.keyboard import KEYBOARD_LAYOUT_QWERTY, KEYBOARD_LAYOUT_CHEONJIIN
+from tests.test_sentences import TEST_SENTENCE_GROUPS
+
+
+def _resolve_test_sentence(raw_value, parser):
+    """'<인덱스>' 또는 '<그룹>:<인덱스>' 형식을 실제 문장 문자열로 바꾼다.
+
+    그룹을 생략하면 'legacy'로 취급한다(TEST_SENTENCE_GROUPS['legacy']==
+    TEST_SENTENCES). 잘못된 형식/그룹/인덱스는 parser.error로 즉시 종료한다.
+    """
+
+    if raw_value is None:
+        return None
+
+    if ":" in raw_value:
+        group_name, _, index_text = raw_value.partition(":")
+    else:
+        group_name, index_text = "legacy", raw_value
+
+    if group_name not in TEST_SENTENCE_GROUPS:
+        available = ", ".join(sorted(TEST_SENTENCE_GROUPS))
+        parser.error(
+            f"--test-sentence의 그룹 '{group_name}'이(가) 존재하지 않습니다. "
+            f"사용 가능한 그룹: {available}"
+        )
+
+    try:
+        index = int(index_text)
+    except ValueError:
+        parser.error(
+            f"--test-sentence의 인덱스 '{index_text}'는 정수가 아닙니다."
+        )
+
+    sentences = TEST_SENTENCE_GROUPS[group_name]
+    if index < 0 or index >= len(sentences):
+        parser.error(
+            f"--test-sentence의 인덱스 {index}가 그룹 '{group_name}' 범위"
+            f"(0~{len(sentences) - 1})를 벗어났습니다."
+        )
+
+    return sentences[index]
 
 
 def parse_args():
@@ -95,6 +135,30 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--autocomplete",
+        dest="autocomplete",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "초성 자동완성 사용 여부. 기본값 'on'. 'off'로 끄면 이 플래그가 "
+            "config_snapshot에 등재되지 않아 config_hash로 조건이 구분되지 "
+            "않으므로 --condition-label을 함께 지정해야 한다."
+        ),
+    )
+
+    parser.add_argument(
+        "--test-sentence",
+        dest="test_sentence",
+        default=None,
+        help=(
+            "문장 테스트 목표 문장을 '<인덱스>' 또는 '<그룹>:<인덱스>' 형식으로 "
+            "결정적으로 지정한다(그룹: legacy/hit/miss, tests/test_sentences.py "
+            "TEST_SENTENCE_GROUPS 참고). 생략하면 기존과 동일하게 "
+            "TEST_SENTENCES 중에서 무작위로 고른다."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.performance_flow and (
@@ -114,6 +178,11 @@ def parse_args():
                 f"사용 가능한 strategy: {available}"
             )
 
+    if args.autocomplete == "off" and not args.condition_label:
+        parser.error("--autocomplete off 실행은 --condition-label 필수")
+
+    resolved_test_sentence = _resolve_test_sentence(args.test_sentence, parser)
+
     return (
         args.gaze_mode,
         args.strategy,
@@ -122,4 +191,6 @@ def parse_args():
         args.condition_label,
         args.calib_points,
         args.performance_flow,
+        args.autocomplete,
+        resolved_test_sentence,
     )
