@@ -272,6 +272,10 @@ def main(
     performance_metrics = None
     session_exported = False
     blink_detector = BlinkDetector(
+        # 의도 깜빡임 상한은 프론트엔드 BlinkController(INTENT_MAX_MS=1200)와
+        # 맞춘다. 모듈 기본값(0.8초)은 시선 게이팅 용도로 쓰는 다른 호출부가
+        # 있으므로 여기서만 명시한다.
+        intent_max_sec=1.2,
         detect_natural=True,
         detect_intentional=True
     )
@@ -517,6 +521,10 @@ def main(
                 and not results.multi_face_landmarks
                 and performance_test_flow.stage == BLINK_CALIBRATION
             ):
+                # 얼굴이 없는 동안은 단계 경과 시간을 멈춘다 - 사용자가 자리를
+                # 비운 사이에 깜빡임 대기 창이 만료되면 안 된다.
+                blink_calibrator.update(None)
+
                 blink_canvas = draw_blink_calibration_screen(
                     blink_calibrator.get_instruction(),
                     ear,
@@ -532,6 +540,8 @@ def main(
                 if key == ord('r'):
                     blink_calibrator.reset()
                     blink_selection.reset()
+                if key == ord('c') and blink_calibrator.failed:
+                    blink_calibrator.continue_with_defaults()
                 continue
 
             if (
@@ -650,6 +660,7 @@ def main(
                         blink_detector = BlinkDetector(
                             close_threshold=blink_result["close_threshold"],
                             open_threshold=blink_result["open_threshold"],
+                            intent_max_sec=1.2,
                             detect_natural=True,
                             detect_intentional=True,
                         )
@@ -681,6 +692,10 @@ def main(
                     if key == ord('r'):
                         blink_calibrator.reset()
                         blink_selection.reset()
+                    if key == ord('c') and blink_calibrator.failed:
+                        # 3회 연속 깜빡임을 놓친 경우, 잘못된 개인 threshold를
+                        # 만드는 대신 detector 기본값으로 진행한다.
+                        blink_calibrator.continue_with_defaults()
                     continue
 
                 # ── 입벌림 캘리브레이션 ─────────────────────────
@@ -1089,7 +1104,15 @@ def main(
                 mouth_click = False
                 mar = 0.0
 
-            if flow_input_mode == "blink" and performance_input_unlocked:
+            # 좌표가 무효한 프레임(눈 감김)에도 계속 호출해야 한다 - 눈을 감으면
+            # GazePipeline이 좌표를 버리므로, 그 이유로 reset하면 잠금과 armed가
+            # 통째로 날아가 모든 깜빡임이 무효가 된다. 얼굴 신호 자체가 없을
+            # 때만 제스처를 폐기한다.
+            if (
+                flow_input_mode == "blink"
+                and performance_input_unlocked
+                and results.multi_face_landmarks
+            ):
                 clicked_target = blink_selection.update(
                     hovered_target,
                     blink_event,

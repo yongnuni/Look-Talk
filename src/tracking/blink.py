@@ -165,16 +165,38 @@ class BlinkDetector:
         return None
 
 
+# 눈을 감기 전에 한 타깃을 얼마나 안정적으로 바라봐야 선택 후보로 잠글지.
+# MouthClickDetector.lock_time(0.25초)과 같은 값 — 두 제스처 모드의 잠금
+# 타이밍을 일치시킨다.
+BLINK_LOCK_TIME_SEC = 0.25
+
+
 class BlinkSelectionController:
     """기존 ``BlinkDetector`` 이벤트를 현재 키보드 타깃 선택에 연결한다.
 
-    눈을 감으면 시선 좌표가 흔들리므로 감기 직전 타깃을 잠그고, 의도
-    깜빡임으로 눈을 뜬 프레임에도 같은 타깃을 보고 있을 때만 선택한다.
-    EAR 판정과 타깃 hit-test는 각각 기존 ``BlinkDetector``와 fixation
-    파이프라인이 담당하며 이 클래스는 두 결과를 결합만 한다.
+    looktalk-frontend의 ``src/features/multimodalInput/BlinkController.ts``와
+    같은 잠금 모델을 쓴다. EAR 히스테리시스와 깜빡임 분류는 ``BlinkDetector``가,
+    타깃 hit-test는 fixation 파이프라인이 담당하고 이 클래스는 둘을 결합한다.
+
+    동작 순서
+    1. 눈을 뜬 상태에서 같은 타깃을 ``lock_time`` 이상 응시하면 ``locked_target``
+       으로 잠근다. 잠깐 시선이 흔들려 hover가 끊겨도 이미 성립한 잠금은 풀지
+       않고 후보 누적만 초기화한다.
+    2. 눈을 감는 순간 그 잠금을 ``start_target``으로 확정한다.
+    3. 의도 깜빡임으로 눈을 뜨면 ``start_target``을 그대로 선택한다 —
+       **눈을 뜬 프레임의 hover로 재검증하지 않는다.**
+
+    (3)이 중요하다. 눈을 다시 뜬 첫 프레임은 GazePipeline이 눈 감김 동안 버퍼를
+    비웠다가 막 재개한 좌표이고 홍채 신뢰도도 아직 낮아 ``hovered_target``이
+    None이 되기 쉽다. 그 프레임의 hover로 선택을 재검증하면 사용자가 의도적으로
+    깜빡였는데도 입력이 조용히 사라진다. MouthClickDetector가 ``start_key``를
+    제스처 시작 시점에 확정하고 끝에서 재검증하지 않는 것과 같은 이유다.
     """
 
-    def __init__(self):
+    def __init__(self, lock_time=BLINK_LOCK_TIME_SEC):
+        # 눈을 감기 전 잠금에 필요한 최소 응시 시간
+        self.lock_time = lock_time
+
         self.reset()
 
     @property
@@ -182,34 +204,116 @@ class BlinkSelectionController:
         return self._locked_target
 
     def reset(self):
-        self._last_hovered_target = None
-        self._locked_target = None
-        self._was_closed = False
+        """진행 중인 깜빡임 선택 상태를 초기화한다.
 
-    def update(self, hovered_target, blink_event, is_closed):
+        모드 전환이나 추적 실패 뒤에는 눈이 열린 프레임을 먼저 확인해야
+        (``_armed``) 다시 입력을 받는다. 이미 감겨 있던 눈을 새 깜빡임의
+        시작으로 오인하지 않기 위한 안전장치다.
+        """
+
+        self._candidate_target = None
+        self._candidate_started_at = None
+        self._locked_target = None
+
+        # 눈을 감는 순간 확정되는 제스처 대상.
+        # 눈을 뜰 때 이 값을 그대로 선택한다.
+        self._start_target = None
+
+        self._was_closed = False
+        self._armed = False
+
+    def _update_gaze_lock(self, hovered_target, now):
+        """같은 타깃을 ``lock_time`` 이상 응시하면 잠근다.
+
+        MouthClickDetector._update_gaze_lock()과 동일한 규칙이다.
+        """
+
+        if hovered_target is None:
+            # 후보만 무효화하고 이미 성립한 잠금은 유지한다
+            # (시선이 잠깐 키 사이를 지나가는 경우).
+            self._candidate_target = None
+            self._candidate_started_at = None
+            return
+
+        # 이미 잠근 타깃을 계속 보고 있으면 후보를 새로 누적할 필요가 없다.
+        if hovered_target == self._locked_target:
+            self._candidate_target = hovered_target
+            self._candidate_started_at = now
+            return
+
+        # 새로운 타깃을 보기 시작한 경우
+        if hovered_target != self._candidate_target:
+            self._candidate_target = hovered_target
+            self._candidate_started_at = now
+            return
+
+        if (
+            self._candidate_started_at is not None
+            and now - self._candidate_started_at >= self.lock_time
+        ):
+            self._locked_target = hovered_target
+
+    def _clear_lock(self):
+        self._candidate_target = None
+        self._candidate_started_at = None
+        self._locked_target = None
+        self._start_target = None
+
+    def update(self, hovered_target, blink_event, is_closed, now=None):
+        """한 프레임의 hover/깜빡임 상태를 받아 선택된 타깃을 돌려준다.
+
+        시선 좌표가 무효한 프레임(눈 감김 등)에서도 ``hovered_target=None``으로
+        매 프레임 호출해야 한다. 좌표가 무효하다는 이유로 ``reset()``하면
+        잠금과 ``_armed``가 통째로 날아가 모든 깜빡임이 무효가 된다.
+        """
+
+        if now is None:
+            now = time.monotonic()
+
         if is_closed:
             if not self._was_closed:
-                self._locked_target = self._last_hovered_target
+                # 여기서 대상을 확정한다 —
+                # 눈을 뜬 뒤에는 다시 검증하지 않는다.
+                # 아직 눈 뜬 프레임을 본 적이 없으면(_armed=False) 이미 감겨
+                # 있던 눈이므로 이번 감김은 제스처로 세지 않는다.
+                self._start_target = (
+                    self._locked_target if self._armed else None
+                )
+
             self._was_closed = True
 
             if (
                 blink_event is not None
                 and blink_event.kind == BlinkKind.LONG_CLOSURE
             ):
-                self._locked_target = None
+                # 너무 오래 감은 것은 입력 의도가 아니므로 제스처를 폐기한다.
+                self._clear_lock()
+
             return None
 
-        selected_target = None
-        if (
-            self._was_closed
-            and blink_event is not None
-            and blink_event.kind == BlinkKind.INTENTIONAL
-            and self._locked_target is not None
-            and hovered_target == self._locked_target
-        ):
-            selected_target = self._locked_target
+        was_closed = self._was_closed
 
         self._was_closed = False
-        self._locked_target = None
-        self._last_hovered_target = hovered_target
+        self._armed = True
+
+        if not was_closed:
+            # 계속 눈을 뜨고 있는 프레임 — 잠금만 갱신한다.
+            self._update_gaze_lock(hovered_target, now)
+            return None
+
+        # 눈을 막 뜬 프레임. 잠근 대상을 hover로 재검증하지 않는다.
+        selected_target = None
+
+        if (
+            blink_event is not None
+            and blink_event.kind == BlinkKind.INTENTIONAL
+            and self._start_target is not None
+        ):
+            selected_target = self._start_target
+
+        # 입벌림 모드가 입을 닫는 순간 잠금을 전부 초기화하는 것과 대칭이다.
+        # 다음 입력에는 다시 lock_time만큼 응시해야 하며, 시선을 옮긴 뒤의
+        # 자연 깜빡임이 남아 있던 잠금을 눌러버리는 사고를 구조적으로 막는다.
+        self._clear_lock()
+
         return selected_target
